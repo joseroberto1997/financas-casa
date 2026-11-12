@@ -9,7 +9,8 @@ App simples para o casal lançar gastos, acompanhar contas do mês, faturas dos 
 
 - **Resumo** do mês: entradas, despesas, já pago, falta pagar, sobra prevista, VR/VA separado, histórico por mês.
 - **Contas**: contas fixas e entradas, status Pago / A pagar, faturas calculadas automaticamente a partir dos cartões.
-- **Cartões** (Itaú, C6, Nubank e outros): compras à vista, parceladas e recorrentes, com o campo **Dívida de terceiros** — a parte de outra pessoa sai da conta da casa e vai para “a receber”, com botão “Recebi tudo”.
+- **Gastos**: lance qualquer gasto escolhendo como foi pago — **Crédito** (entra na fatura do cartão: Itaú, C6, Nubank…), **Débito**, **Pix** ou **Dinheiro** (já conta como pago no mês). Compras únicas, parceladas ou de todo mês.
+- **Dívida de terceiros** em qualquer gasto (ex.: Gilberto): a parte da outra pessoa sai da conta da casa e vai para “a receber”, com botão “Recebi tudo”.
 - **Guardado**: saldo reservado para as contas; ao marcar algo como pago dá para tirar automaticamente do guardado.
 - **Atividade**: histórico de quem lançou/editou o quê.
 - **Começar mês**: copia contas, entradas, recorrentes e a próxima parcela das compras parceladas do mês anterior.

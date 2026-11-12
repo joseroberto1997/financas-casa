@@ -128,7 +128,7 @@ td:first-child,th:first-child{text-align:left}
 <nav class="tabs" id="tabs">
   <a href="#resumo" data-t="resumo"><span class="ic">📊</span>Resumo</a>
   <a href="#contas" data-t="contas"><span class="ic">🧾</span>Contas</a>
-  <a href="#cartoes" data-t="cartoes"><span class="ic">💳</span>Cartões</a>
+  <a href="#cartoes" data-t="cartoes"><span class="ic">💳</span>Gastos</a>
   <a href="#reserva" data-t="reserva"><span class="ic">🐷</span>Guardado</a>
   <a href="#atividade" data-t="atividade"><span class="ic">🕑</span>Atividade</a>
 </nav>
@@ -182,14 +182,18 @@ async function loadPerfis(){
 }
 
 /* ---------- computations ---------- */
+const FORMAS = {credito:'💳 Crédito', debito:'🏦 Débito', pix:'⚡ Pix', dinheiro:'💵 Dinheiro'};
+const isCred = it => !it.forma || it.forma==='credito';
+const AV = 'Débito / Pix';
 const terceiroTotal = it => (it.terceiros||[]).reduce((a,t)=>a+(+t.valor||0),0);
 function monthData(m){
   const contas = S.contas.filter(d=>d.mes===m);
   const entradas = S.entradas.filter(d=>d.mes===m);
   const itens = S.cartao.filter(d=>d.mes===m);
-  const cards = [...new Set([...cfg().cartoes, ...itens.map(i=>i.cartao)])];
+  const cred = itens.filter(isCred), avista = itens.filter(i=>!isCred(i));
+  const cards = [...new Set([...cfg().cartoes, ...cred.map(i=>i.cartao)])];
   const faturas = cards.map(c => {
-    const its = itens.filter(i=>i.cartao===c);
+    const its = cred.filter(i=>i.cartao===c);
     const total = r2(its.reduce((a,i)=>a+(+i.valor||0),0));
     const terc = r2(its.reduce((a,i)=>a+terceiroTotal(i),0));
     const st = S.faturas.find(f=>f.id===m+'__'+slug(c)) || null;
@@ -202,7 +206,10 @@ function monthData(m){
   const pagoContas = r2(contas.filter(c=>c.status==='pago').reduce((a,c)=>a+(+c.valor||0),0));
   const despFat = r2(fatCasa.reduce((a,f)=>a+f.casa,0));
   const pagoFat = r2(fatCasa.filter(f=>f.pago).reduce((a,f)=>a+f.casa,0));
-  const despesas = r2(despContas+despFat), pago = r2(pagoContas+pagoFat), apagar = r2(despesas-pago);
+  const avTotal = r2(avista.reduce((a,i)=>a+(+i.valor||0),0));
+  const avTerc = r2(avista.reduce((a,i)=>a+terceiroTotal(i),0));
+  const avCasa = r2(avTotal-avTerc);
+  const despesas = r2(despContas+despFat+avCasa), pago = r2(pagoContas+pagoFat+avCasa), apagar = r2(despesas-pago);
   // third parties
   const pessoas = {};
   for (const it of itens) for (const t of (it.terceiros||[])) {
@@ -210,7 +217,7 @@ function monthData(m){
     p.total += +t.valor||0; if (t.recebido) p.recebido += +t.valor||0; p.itens.push({it, t});
   }
   Object.values(pessoas).forEach(p=>{p.total=r2(p.total);p.recebido=r2(p.recebido);p.pendente=r2(p.total-p.recebido)});
-  return {contas, entradas, itens, faturas, fatCasa, dinheiro, beneficio, despesas, pago, apagar,
+  return {contas, entradas, itens, avista, avTotal, avTerc, avCasa, faturas, fatCasa, dinheiro, beneficio, despesas, pago, apagar,
           sobraPrev: r2(dinheiro-despesas), sobraAtual: r2(dinheiro-pago), pessoas: Object.values(pessoas).sort((a,b)=>b.total-a.total)};
 }
 function saldoReserva(){ return r2(S.reserva.reduce((a,r)=>a+(r.tipo==='retirada'?-1:1)*(+r.valor||0),0)); }
@@ -327,16 +334,20 @@ function formEntrada(e){
 }
 function formItem(it, preCard){
   const isNew = !it;
-  it = it || {cartao: preCard || (cardFilter!=='Todos'?cardFilter:cfg().cartoes[0]), terceiros:[]};
+  const pre = preCard || (cardFilter!=='Todos'?cardFilter:null);
+  it = it || (pre===AV ? {forma:'pix', terceiros:[]} : {forma: pre?'credito':'pix', cartao: pre || cfg().cartoes[0], terceiros:[]});
+  const forma = it.forma || 'credito';
   const tipo = it.recorrente ? 'rec' : (it.parcTotal ? 'parc' : 'avulso');
-  const cards = [...new Set([...cfg().cartoes, it.cartao])];
+  const cards = [...new Set([...cfg().cartoes, ...(it.cartao?[it.cartao]:[])])];
   const tercs = (it.terceiros||[]).map(t=>({...t}));
   const nm = allNames();
-  openModal(`<h2>${isNew?'Nova compra no cartão':'Editar compra'}</h2>
-    <div class="f"><label>Cartão</label><select id="c">${cards.map(c=>`<option ${c===it.cartao?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
-    <div class="f"><label>Descrição</label><input id="d" value="${esc(it.descricao)}" placeholder="Ex.: Mercado, Ração dos gatos"></div>
-    <div class="f"><label>Valor desta fatura (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(it.valor)}" placeholder="0,00"></div>
-    <div class="f"><label>Tipo</label>${seg('tp',[['avulso','À vista'],['parc','Parcelado'],['rec','Recorrente']],tipo)}</div>
+  openModal(`<h2>${isNew?'Novo gasto':'Editar gasto'}</h2>
+    <div class="f"><label>Como foi pago?</label>${seg('fm',Object.entries(FORMAS),forma)}</div>
+    <div class="f" id="fcart"><label>Cartão de crédito</label><select id="c">${cards.map(c=>`<option ${c===it.cartao?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+    <div class="f" id="fbanco"><label>Saiu de qual conta? (opcional)</label><select id="b"><option value="">—</option>${[...new Set([...cfg().cartoes, ...(it.banco?[it.banco]:[])])].map(c=>`<option ${c===it.banco?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+    <div class="f"><label>Descrição</label><input id="d" value="${esc(it.descricao)}" placeholder="Ex.: Mercado, Ração dos gatos, Uber"></div>
+    <div class="f"><label id="vlab">Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(it.valor)}" placeholder="0,00"></div>
+    <div class="f"><label>Tipo</label>${seg('tp',[['avulso','Única'],['parc','Parcelado'],['rec','Todo mês']],tipo)}</div>
     <div class="two" id="parcs" ${tipo==='parc'?'':'hidden'}>
       <div class="f"><label>Parcela atual</label><input id="pa" inputmode="numeric" value="${esc(it.parcAtual||'')}" placeholder="1"></div>
       <div class="f"><label>Total de parcelas</label><input id="pt" inputmode="numeric" value="${esc(it.parcTotal||'')}" placeholder="10"></div>
@@ -360,12 +371,19 @@ function formItem(it, preCard){
     };
     drawT();
     ov.querySelector('#addt').onclick = ()=>{ sync(); const v = parseBRL(ov.querySelector('#v').value); const rest = (v>0) ? r2(v - tercs.reduce((a,t)=>a+(parseBRL(t.valorTxt??t.valor)||0),0)) : ''; tercs.push({nome: tercs.length?'':(nm.includes('Gilberto')?'Gilberto':''), valorTxt: rest>0?fmtIn(rest):'', recebido:false}); drawT(); tl.querySelector('.trow:last-child .n').focus(); };
-    ov.querySelector('[data-name=tp]').addEventListener('change', e=>{ ov.querySelector('#parcs').hidden = e.target.dataset.v!=='parc'; });
+    const tpSeg = ov.querySelector('[data-name=tp]'), fmSeg = ov.querySelector('[data-name=fm]');
+    const upd = ()=>{ const cr = fmSeg.dataset.v==='credito';
+      ov.querySelector('#fcart').hidden = !cr; ov.querySelector('#fbanco').hidden = cr || fmSeg.dataset.v==='dinheiro';
+      ov.querySelector('#vlab').textContent = cr ? 'Valor nesta fatura (R$)' : 'Valor (R$)';
+      const pb = tpSeg.querySelector('[data-v=parc]'); pb.hidden = !cr;
+      if (!cr && tpSeg.dataset.v==='parc'){ tpSeg.querySelector('[data-v=avulso]').click(); }
+      ov.querySelector('#parcs').hidden = tpSeg.dataset.v!=='parc'; };
+    tpSeg.addEventListener('change', upd); fmSeg.addEventListener('change', upd); upd();
     ov.querySelector('#save').onclick = async ()=>{
       sync();
       const err = ov.querySelector('.err');
       const descricao = ov.querySelector('#d').value.trim(), valor = parseBRL(ov.querySelector('#v').value), cartao = ov.querySelector('#c').value;
-      const tp = ov.querySelector('[data-name=tp]').dataset.v;
+      const tp = tpSeg.dataset.v, fm = fmSeg.dataset.v, banco = ov.querySelector('#b').value || null;
       if (!descricao || !(valor>0)) { err.textContent='Preencha descrição e valor.'; return; }
       let parcAtual=null, parcTotal=null;
       if (tp==='parc'){ parcAtual=parseInt(ov.querySelector('#pa').value,10); parcTotal=parseInt(ov.querySelector('#pt').value,10);
@@ -376,12 +394,13 @@ function formItem(it, preCard){
         if(!nome || !(v>0)){ err.textContent='Cada pessoa precisa de nome e valor.'; return; }
         terceiros.push({nome, valor:v, recebido: !!t.recebido}); }
       if (terceiros.reduce((a,t)=>a+t.valor,0) > valor + 0.005){ err.textContent='A soma dos terceiros passa do valor da compra.'; return; }
-      const data = {mes: it.mes||mes, cartao, descricao, valor, parcAtual, parcTotal, recorrente: tp==='rec', terceiros};
+      const data = fm==='credito' ? {mes: it.mes||mes, forma:'credito', cartao, banco:null, descricao, valor, parcAtual, parcTotal, recorrente: tp==='rec', terceiros}
+                                  : {mes: it.mes||mes, forma:fm, cartao:null, banco: fm==='dinheiro'?null:banco, descricao, valor, parcAtual:null, parcTotal:null, recorrente: tp==='rec', terceiros};
       ov.querySelector('#save').disabled = true;
       try { isNew ? await addDoc('cartao', data) : await updDoc('cartao', it.id, data); closeModal(); }
       catch(e){ err.textContent = writeErr(e); ov.querySelector('#save').disabled=false; }
     };
-    const del = ov.querySelector('#del'); if (del) del.onclick = ()=> confirmBox('Apagar compra?', `“${esc(it.descricao)}” será removida da fatura.`, 'Apagar', ()=>delDoc('cartao', it.id), true);
+    const del = ov.querySelector('#del'); if (del) del.onclick = ()=> confirmBox('Apagar gasto?', `“${esc(it.descricao)}” será removido.`, 'Apagar', ()=>delDoc('cartao', it.id), true);
   });
 }
 function formReserva(r, tipoIni){
@@ -466,12 +485,12 @@ function copiarMes(){
   const contas = P.contas, entradas = P.entradas;
   const itens = P.itens.filter(i => i.recorrente || (i.parcTotal && i.parcAtual < i.parcTotal));
   if (!contas.length && !entradas.length && !itens.length){ showToast('O mês anterior está vazio.'); return; }
-  confirmBox(`Começar ${mesLabel(mes)}`, `Copiar de ${mesLabel(prev)}:<br>• ${contas.length} contas (como “A pagar”)<br>• ${entradas.length} entradas<br>• ${itens.length} compras de cartão recorrentes ou parceladas (com a próxima parcela)<br><br>Depois é só ajustar os valores que mudarem.`, 'Copiar', async(ov)=>{
+  confirmBox(`Começar ${mesLabel(mes)}`, `Copiar de ${mesLabel(prev)}:<br>• ${contas.length} contas (como “A pagar”)<br>• ${entradas.length} entradas<br>• ${itens.length} gastos recorrentes (“todo mês”) ou parcelados (com a próxima parcela)<br><br>Depois é só ajustar os valores que mudarem.`, 'Copiar', async(ov)=>{
     const b = ov.querySelector('#ok'); let n=0; const tot = contas.length+entradas.length+itens.length;
     const tick = ()=>{ n++; b.textContent = `Copiando ${n}/${tot}…`; };
     for (const c of contas){ await addDoc('contas', {mes, descricao:c.descricao, valor:c.valor, status:'apagar', dia:c.dia||null}); tick(); }
     for (const e of entradas){ await addDoc('entradas', {mes, descricao:e.descricao, valor:e.valor, tipo:e.tipo||'dinheiro'}); tick(); }
-    for (const i of itens){ await addDoc('cartao', {mes, cartao:i.cartao, descricao:i.descricao, valor:i.valor, recorrente:!!i.recorrente,
+    for (const i of itens){ await addDoc('cartao', {mes, forma:i.forma||'credito', cartao:i.cartao||null, banco:i.banco||null, descricao:i.descricao, valor:i.valor, recorrente:!!i.recorrente,
       parcAtual: i.parcTotal ? i.parcAtual+1 : null, parcTotal: i.parcTotal||null,
       terceiros:(i.terceiros||[]).map(t=>({nome:t.nome, valor:t.valor, recebido:false}))}); tick(); }
   });
@@ -546,27 +565,51 @@ function vContas(){
   <div class="sec-h"><b>🧾 Contas</b><span class="muted">pago ${brl(D.pago)} · falta ${brl(D.apagar)}</span></div>
   <div class="card">
     ${D.fatCasa.map(f=>`<div class="row"><div class="main click" data-goc="${esc(f.cartao)}" style="cursor:pointer"><div class="t">💳 Fatura ${esc(f.cartao)}</div><div class="s">parte da casa${f.terc>0?` · fatura total ${brl(f.total)} (${brl(f.terc)} de terceiros)`:''} · calculada pelos lançamentos do cartão</div></div><div class="val">${brl(f.casa)}</div><button class="pill ${f.pago?'pago':'apagar'}" data-fat="${esc(f.cartao)}">${f.pago?'Pago':'A pagar'}</button></div>`).join('')}
+    ${D.avista.length?`<div class="row"><div class="main click" data-goc="${AV}" style="cursor:pointer"><div class="t">🛒 Débito / Pix / Dinheiro</div><div class="s">${D.avista.length} gastos já pagos no mês${D.avTerc>0?` · ${brl(D.avTerc)} de terceiros fora da conta`:''}</div></div><div class="val">${brl(D.avCasa)}</div><span class="pill pago">Pago</span></div>`:''}
     ${contasOrd.map(c=>`<div class="row"><div class="main click" data-conta="${c.id}" style="cursor:pointer"><div class="t">${esc(c.descricao)}</div><div class="s">${c.dia?`<span>dia ${c.dia}</span>`:''}${c.reservaRef?'<span class="tag ok">pago c/ guardado</span>':''}<span>${metaLine(c)}</span></div></div><div class="val">${brl(c.valor)}</div><button class="pill ${c.status==='pago'?'pago':'apagar'}" data-st="${c.id}">${c.status==='pago'?'Pago':'A pagar'}</button></div>`).join('')}
-    ${!D.fatCasa.length && !D.contas.length ? '<div class="empty">Nenhuma conta lançada.</div>':''}
+    ${!D.fatCasa.length && !D.contas.length && !D.avista.length ? '<div class="empty">Nenhuma conta lançada.</div>':''}
     ${canWrite?'<div style="padding-top:8px"><button class="btn sm" id="addConta">+ Conta</button></div>':''}
   </div>`;
 }
+function itemRow(it){
+  const fm = it.forma && it.forma!=='credito' ? `<span class="tag">${FORMAS[it.forma]||esc(it.forma)}${it.banco?' · '+esc(it.banco):''}</span>` : '';
+  return `<div class="row click" data-item="${it.id}">
+    <div class="main"><div class="t">${esc(it.descricao)}</div>
+      <div class="s">${fm}${it.parcTotal?`<span class="tag">${it.parcAtual}/${it.parcTotal}</span>`:''}${it.recorrente?'<span class="tag">Todo mês</span>':''}
+      ${(it.terceiros||[]).map((t,i)=>`<span class="tag third ${t.recebido?'ok':''}" data-rc="${it.id}" data-i="${i}" title="Tocar para marcar recebido">👤 ${esc(t.nome)} ${brl(t.valor)}${t.recebido?' ✓':''}</span>`).join('')}
+      <span>${metaLine(it)}</span></div></div>
+    <div class="val">${brl(it.valor)}</div>
+  </div>`;
+}
+const sortItens = arr => [...arr].sort((a,b)=>terceiroTotal(a)-terceiroTotal(b) || (a.createdAt||'').localeCompare(b.createdAt||''));
 function vCartoes(){
   const D = monthData(mes);
   const cards = D.faturas.map(f=>f.cartao);
-  if (cardFilter!=='Todos' && !cards.includes(cardFilter)) cardFilter='Todos';
+  const chips = ['Todos', AV, ...cards];
+  if (!chips.includes(cardFilter)) cardFilter='Todos';
   const show = D.faturas.filter(f=>cardFilter==='Todos' || f.cartao===cardFilter);
+  const showAv = cardFilter==='Todos' || cardFilter===AV;
   const totFat = r2(D.faturas.reduce((a,f)=>a+f.total,0));
   return `
-  <div class="chips">${['Todos',...cards].map(c=>`<button class="chip ${c===cardFilter?'on':''}" data-cf="${esc(c)}">${esc(c)}</button>`).join('')}${canWrite?'<button class="chip" id="addCard">+ cartão</button>':''}</div>
+  <div class="chips">${chips.map(c=>`<button class="chip ${c===cardFilter?'on':''}" data-cf="${esc(c)}">${c===AV?'🛒 '+c:esc(c)}</button>`).join('')}${canWrite?'<button class="chip" id="addCard">+ cartão</button>':''}</div>
   <div class="card" style="border-color:var(--blue)">
     <h3 style="color:var(--blue)">👤 Dívidas de terceiros neste mês</h3>
     ${D.pessoas.length ? D.pessoas.map(p=>`<div class="person"><div class="top"><div><div class="nm">${esc(p.nome)}</div><div class="small muted">deve ${brl(p.total)} · recebido ${brl(p.recebido)}</div></div>
       <div style="text-align:right"><div style="font-weight:800;color:${p.pendente>0.004?'var(--blue)':'var(--accent)'}">${p.pendente>0.004?brl(p.pendente):'Quitado ✓'}</div>
       ${p.pendente>0.004&&canWrite?`<button class="btn sm" data-rt="${esc(p.nome)}" style="margin-top:4px">Recebi tudo</button>`:''}</div></div></div>`).join('')
-      : '<div class="empty" style="padding:6px">Nenhuma compra marcada para terceiros. Ao lançar uma compra, use o campo “Dívida de terceiros”.</div>'}
+      : '<div class="empty" style="padding:6px">Nenhum gasto marcado para terceiros. Ao lançar um gasto (cartão, débito, Pix…), use o campo “Dívida de terceiros”.</div>'}
   </div>
-  <div class="small muted" style="margin:0 2px 10px">Total das faturas no mês: <b>${brl(totFat)}</b></div>
+  <div class="small muted" style="margin:0 2px 10px">No mês: faturas <b>${brl(totFat)}</b> · débito/Pix/dinheiro <b>${brl(D.avTotal)}</b></div>
+  ${showAv?`<div class="card">
+    <h3><span>🛒 Débito / Pix / Dinheiro</span><span class="pill pago">Já pago</span></h3>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px">
+      <div><div class="small muted">Total</div><b style="font-size:18px">${brl(D.avTotal)}</b></div>
+      <div><div class="small muted">Da casa</div><b style="font-size:18px">${brl(D.avCasa)}</b></div>
+      ${D.avTerc>0?`<div><div class="small muted">De terceiros</div><b style="font-size:18px;color:var(--blue)">${brl(D.avTerc)}</b></div>`:''}
+    </div>
+    ${D.avista.length ? sortItens(D.avista).map(itemRow).join('') : '<div class="empty">Nenhum gasto no débito, Pix ou dinheiro neste mês.</div>'}
+    ${canWrite?`<div style="padding-top:8px"><button class="btn sm" data-addin="${AV}">+ Gasto no débito / Pix / dinheiro</button></div>`:''}
+  </div>`:''}
   ${show.map(f=>`
   <div class="card">
     <h3><span>💳 ${esc(f.cartao)}</span>${f.casa>0.004?`<button class="pill ${f.pago?'pago':'apagar'}" data-fat="${esc(f.cartao)}">${f.pago?'Pago':'A pagar'}</button>`:''}</h3>
@@ -575,14 +618,7 @@ function vCartoes(){
       <div><div class="small muted">Da casa</div><b style="font-size:18px">${brl(f.casa)}</b></div>
       ${f.terc>0?`<div><div class="small muted">De terceiros</div><b style="font-size:18px;color:var(--blue)">${brl(f.terc)}</b></div>`:''}
     </div>
-    ${f.itens.length ? [...f.itens].sort((a,b)=>terceiroTotal(a)-terceiroTotal(b) || (a.createdAt||'').localeCompare(b.createdAt||'')).map(it=>`
-      <div class="row click" data-item="${it.id}">
-        <div class="main"><div class="t">${esc(it.descricao)}</div>
-          <div class="s">${it.parcTotal?`<span class="tag">${it.parcAtual}/${it.parcTotal}</span>`:''}${it.recorrente?'<span class="tag">Recorrente</span>':''}
-          ${(it.terceiros||[]).map((t,i)=>`<span class="tag third ${t.recebido?'ok':''}" data-rc="${it.id}" data-i="${i}" title="Tocar para marcar recebido">👤 ${esc(t.nome)} ${brl(t.valor)}${t.recebido?' ✓':''}</span>`).join('')}
-          <span>${metaLine(it)}</span></div></div>
-        <div class="val">${brl(it.valor)}</div>
-      </div>`).join('') : '<div class="empty">Nenhuma compra neste cartão.</div>'}
+    ${f.itens.length ? sortItens(f.itens).map(itemRow).join('') : '<div class="empty">Nenhuma compra neste cartão.</div>'}
     ${canWrite?`<div style="padding-top:8px"><button class="btn sm" data-addin="${esc(f.cartao)}">+ Compra no ${esc(f.cartao)}</button></div>`:''}
   </div>`).join('')}
   <div class="small muted" style="margin:4px 2px">Dica: toque na etiqueta azul 👤 de um item para marcar só ele como recebido.</div>`;
@@ -606,7 +642,7 @@ function vReserva(){
 }
 function vAtividade(){
   const all = [];
-  const label = {contas:'conta', entradas:'entrada', cartao:'compra no cartão', reserva:'movimento do guardado'};
+  const label = {contas:'conta', entradas:'entrada', cartao:'gasto', reserva:'movimento do guardado'};
   for (const c of ['contas','entradas','cartao','reserva']) for (const d of S[c]) {
     if (d.createdBy && d.createdBy!=='planilha' && d.createdAt) all.push({t:d.createdAt, by:d.createdBy, acao:'adicionou', c, d});
     if (d.updatedBy && d.updatedAt) all.push({t:d.updatedAt, by:d.updatedBy, acao:'editou', c, d});
@@ -616,7 +652,7 @@ function vAtividade(){
   if (actFilter!=='Todos' && !pessoas.includes(actFilter)) actFilter='Todos';
   const list = all.filter(a=>actFilter==='Todos'||who(a.by)===actFilter).sort((a,b)=>b.t.localeCompare(a.t)).slice(0,80);
   const desc = a => a.c==='faturas' ? `a fatura ${esc(a.d.cartao)} de ${mesCurto(a.d.mes)}` :
-    `${label[a.c]} <b>${esc(a.d.descricao||'')}</b> ${a.d.cartao?`(${esc(a.d.cartao)}) `:''}· ${brl(a.d.valor)}${a.d.mes?` · ${mesCurto(a.d.mes)}`:''}${(a.d.terceiros||[]).length?` · 👤 ${a.d.terceiros.map(t=>esc(t.nome)).join(', ')}`:''}`;
+    `${label[a.c]} <b>${esc(a.d.descricao||'')}</b> ${a.c==='cartao'?`(${a.d.cartao&&isCred(a.d)?esc(a.d.cartao):(FORMAS[a.d.forma]||'')}) `:''}· ${brl(a.d.valor)}${a.d.mes?` · ${mesCurto(a.d.mes)}`:''}${(a.d.terceiros||[]).length?` · 👤 ${a.d.terceiros.map(t=>esc(t.nome)).join(', ')}`:''}`;
   return `
   ${pessoas.length>1?`<div class="chips">${['Todos',...pessoas].map(p=>`<button class="chip ${p===actFilter?'on':''}" data-af="${esc(p)}">${esc(p)}</button>`).join('')}</div>`:''}
   <div class="card"><h3>🕑 Últimos lançamentos e alterações</h3>
@@ -676,7 +712,7 @@ function render(){
   else if (phase==='loading') v.innerHTML = '<div class="empty">Carregando…</div>';
   else v.innerHTML = ({resumo:vResumo, contas:vContas, cartoes:vCartoes, reserva:vReserva, atividade:vAtividade}[tab])();
   const fab = $('#fab');
-  const fabs = {contas:['+ Conta', ()=>formConta()], cartoes:['+ Compra no cartão', ()=>formItem()], reserva:['+ Guardar', ()=>formReserva()], resumo:['+ Lançar compra', ()=>formItem()]};
+  const fabs = {contas:['+ Conta', ()=>formConta()], cartoes:['+ Lançar gasto', ()=>formItem()], reserva:['+ Guardar', ()=>formReserva()], resumo:['+ Lançar gasto', ()=>formItem()]};
   if (inApp && canWrite && fabs[tab]) { fab.hidden=false; fab.textContent=fabs[tab][0]; fab.onclick=fabs[tab][1]; } else fab.hidden=true;
   if (phase==='login') bindLogin(v);
   if (phase==='notmember') v.querySelector('#logout2').onclick = logout;
