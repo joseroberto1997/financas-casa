@@ -129,6 +129,7 @@ td:first-child,th:first-child{text-align:left}
   <a href="#resumo" data-t="resumo"><span class="ic">📊</span>Resumo</a>
   <a href="#contas" data-t="contas"><span class="ic">🧾</span>Contas</a>
   <a href="#cartoes" data-t="cartoes"><span class="ic">💳</span>Gastos</a>
+  <a href="#terceiros" data-t="terceiros"><span class="ic">👥</span>Terceiros</a>
   <a href="#reserva" data-t="reserva"><span class="ic">🐷</span>Guardado</a>
   <a href="#atividade" data-t="atividade"><span class="ic">🕑</span>Atividade</a>
 </nav>
@@ -155,14 +156,15 @@ const dataCurta = iso => { if(!iso) return ''; const d = new Date(iso); return d
 function store(k,v){ try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v);}catch(e){ return null; } }
 
 /* ---------- state ---------- */
-const COLS = ['contas','entradas','cartao','faturas','reserva','config'];
-const S = {contas:[],entradas:[],cartao:[],faturas:[],reserva:[],config:[]};
+const COLS = ['contas','entradas','cartao','faturas','reserva','config','recebimentos'];
+const S = {contas:[],entradas:[],cartao:[],faturas:[],reserva:[],config:[],recebimentos:[]};
 let myId = null, canWrite = true;
 const names = {};
 const today = new Date();
 let mes = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0');
 let tab = 'resumo';
 let cardFilter = 'Todos';
+let tercSel = null;
 let actFilter = 'Todos';
 
 function cfg(){ const c = S.config.find(d=>d.id==='app') || {}; return {cartoes: c.cartoes && c.cartoes.length ? c.cartoes : ['Itaú','C6','Nubank'], terceiros: c.terceiros || []}; }
@@ -220,8 +222,34 @@ function monthData(m){
   return {contas, entradas, itens, avista, avTotal, avTerc, avCasa, faturas, fatCasa, dinheiro, beneficio, despesas, pago, apagar,
           sobraPrev: r2(dinheiro-despesas), sobraAtual: r2(dinheiro-pago), pessoas: Object.values(pessoas).sort((a,b)=>b.total-a.total)};
 }
-function saldoReserva(){ return r2(S.reserva.reduce((a,r)=>a+(r.tipo==='retirada'?-1:1)*(+r.valor||0),0)); }
+const CAIXAS = {contas:'🧾 Para contas e dívidas', emergencia:'🛟 Emergência'};
+const cxOf = r => r.caixinha || 'contas';
+function saldoReserva(cx){ return r2(S.reserva.filter(r=>!cx || cxOf(r)===cx).reduce((a,r)=>a+(r.tipo==='retirada'?-1:1)*(+r.valor||0),0)); }
+let resFilter = 'todas';
 function allNames(){ const s = new Set(cfg().terceiros); S.cartao.forEach(i=>(i.terceiros||[]).forEach(t=>t.nome&&s.add(t.nome.trim()))); return [...s].sort(); }
+
+/* ---------- terceiros ---------- */
+const keyN = n => String(n||'').trim().toLowerCase();
+function tercData(){
+  const P = {};
+  const get = n => { const k = keyN(n) || '?'; return P[k] || (P[k] = {nome:String(n||'?').trim(), itens:[], pags:[]}); };
+  S.cartao.forEach(it => (it.terceiros||[]).forEach((t,i) => get(t.nome).itens.push({it, t, i})));
+  S.recebimentos.forEach(r => get(r.pessoa).pags.push(r));
+  const out = Object.values(P).map(p => {
+    const total = r2(p.itens.reduce((a,x)=>a+(+x.t.valor||0),0));
+    const pagoAnt = r2(p.itens.filter(x=>x.t.recebido).reduce((a,x)=>a+(+x.t.valor||0),0));
+    const pagoPag = r2(p.pags.reduce((a,r)=>a+(+r.valor||0),0));
+    const meses = [...new Set([...p.itens.map(x=>x.it.mes), ...p.pags.map(r=>r.mes)])].filter(Boolean).sort();
+    let acc = 0;
+    const porMes = meses.map(m => {
+      const div = r2(p.itens.filter(x=>x.it.mes===m).reduce((a,x)=>a+(+x.t.valor||0),0));
+      const pag = r2(p.itens.filter(x=>x.it.mes===m && x.t.recebido).reduce((a,x)=>a+(+x.t.valor||0),0) + p.pags.filter(r=>r.mes===m).reduce((a,r)=>a+(+r.valor||0),0));
+      acc = r2(acc + div - pag); return {m, div, pag, saldo: acc};
+    });
+    return {...p, total, pago: r2(pagoAnt+pagoPag), saldo: r2(total-pagoAnt-pagoPag), porMes};
+  });
+  return out.sort((a,b)=>b.saldo-a.saldo || a.nome.localeCompare(b.nome));
+}
 
 /* ---------- writes ---------- */
 function writeErr(e){
@@ -403,26 +431,85 @@ function formItem(it, preCard){
     const del = ov.querySelector('#del'); if (del) del.onclick = ()=> confirmBox('Apagar gasto?', `“${esc(it.descricao)}” será removido.`, 'Apagar', ()=>delDoc('cartao', it.id), true);
   });
 }
-function formReserva(r, tipoIni){
-  const isNew = !r; r = r || {tipo: tipoIni||'deposito'};
+function formReserva(r, tipoIni, cxIni){
+  const isNew = !r; r = r || {tipo: tipoIni||'deposito', caixinha: cxIni || (resFilter!=='todas'?resFilter:'contas')};
   const hoje = new Date().toISOString().slice(0,10);
   openModal(`<h2>${isNew?(r.tipo==='retirada'?'Tirar do guardado':'Guardar dinheiro'):'Editar movimento'}</h2>
+    <div class="f"><label>Caixinha</label>${seg('cx',[['contas','🧾 Contas e dívidas'],['emergencia','🛟 Emergência']],cxOf(r))}</div>
     <div class="f"><label>Tipo</label>${seg('tp',[['deposito','Guardar'],['retirada','Retirar']],r.tipo)}</div>
     <div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div>
-    <div class="f"><label>Descrição</label><input id="d" value="${esc(r.descricao||'')}" placeholder="Ex.: Separado do salário para o cartão"></div>
+    <div class="f"><label>Descrição</label><input id="d" value="${esc(r.descricao||'')}" placeholder="Ex.: Separado do salário"></div>
     <div class="f"><label>Data</label><input id="dt" type="date" value="${esc(r.data||hoje)}"></div>
     ${!isNew?`<p class="small muted">${metaLine(r)}</p>`:''}
     <div class="err"></div>
     <div class="actions">${!isNew?'<button class="btn danger" id="del">Apagar</button>':'<span></span>'}<span class="actions"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="save">Salvar</button></span></div>`, ov=>{
     segBind(ov);
     ov.querySelector('#save').onclick = async ()=>{
-      const valor = parseBRL(ov.querySelector('#v').value), descricao = ov.querySelector('#d').value.trim(), data = ov.querySelector('#dt').value || hoje, tipo = ov.querySelector('[data-name=tp]').dataset.v;
+      const valor = parseBRL(ov.querySelector('#v').value), descricao = ov.querySelector('#d').value.trim(), data = ov.querySelector('#dt').value || hoje;
+      const tipo = ov.querySelector('[data-name=tp]').dataset.v, caixinha = ov.querySelector('[data-name=cx]').dataset.v;
       if (!(valor>0)) { ov.querySelector('.err').textContent='Informe o valor.'; return; }
       ov.querySelector('#save').disabled = true;
-      try { const d={tipo, valor, descricao, data, mes: data.slice(0,7)}; isNew ? await addDoc('reserva', d) : await updDoc('reserva', r.id, d); closeModal(); }
+      try { const d={tipo, caixinha, valor, descricao, data, mes: data.slice(0,7)}; isNew ? await addDoc('reserva', d) : await updDoc('reserva', r.id, d); closeModal(); }
       catch(e){ ov.querySelector('.err').textContent = writeErr(e); ov.querySelector('#save').disabled=false; }
     };
     const del = ov.querySelector('#del'); if (del) del.onclick = ()=> confirmBox('Apagar movimento?', 'O saldo guardado será recalculado.', 'Apagar', ()=>delDoc('reserva', r.id), true);
+  });
+}
+function formTransfer(){
+  const hoje = new Date().toISOString().slice(0,10);
+  openModal(`<h2>Transferir entre caixinhas</h2>
+    <div class="f"><label>De → Para</label>${seg('dir',[['contas','Contas → Emergência'],['emergencia','Emergência → Contas']],'contas')}</div>
+    <div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" placeholder="0,00"></div>
+    <div class="f"><label>Motivo (opcional)</label><input id="d" placeholder="Ex.: sobrou do mês"></div>
+    <div class="err"></div>
+    <div class="actions"><span></span><span class="actions"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="save">Transferir</button></span></div>`, ov=>{
+    segBind(ov);
+    ov.querySelector('#save').onclick = async ()=>{
+      const valor = parseBRL(ov.querySelector('#v').value), de = ov.querySelector('[data-name=dir]').dataset.v, para = de==='contas'?'emergencia':'contas';
+      const mot = ov.querySelector('#d').value.trim();
+      if (!(valor>0)) { ov.querySelector('.err').textContent='Informe o valor.'; return; }
+      ov.querySelector('#save').disabled = true;
+      try{
+        const base = {valor, data:hoje, mes:hoje.slice(0,7)};
+        await addDoc('reserva', {...base, tipo:'retirada', caixinha:de, descricao:`Transferência para ${para==='emergencia'?'Emergência':'Contas'}${mot?' — '+mot:''}`});
+        await addDoc('reserva', {...base, tipo:'deposito', caixinha:para, descricao:`Transferência de ${de==='emergencia'?'Emergência':'Contas'}${mot?' — '+mot:''}`});
+        closeModal();
+      }catch(e){ ov.querySelector('.err').textContent = writeErr(e); ov.querySelector('#save').disabled=false; }
+    };
+  });
+}
+
+function formPagamento(r, pessoaIni, valorIni){
+  const isNew = !r; r = r || {pessoa: pessoaIni || '', valor: valorIni};
+  const hoje = new Date().toISOString().slice(0,10);
+  const nm = allNames();
+  openModal(`<h2>${isNew?'Pagamento recebido':'Editar pagamento'}</h2>
+    <div class="f"><label>Quem pagou?</label><input id="p" list="nomesP" value="${esc(r.pessoa)}" placeholder="Ex.: Gilberto"><datalist id="nomesP">${nm.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
+    <div class="f"><label>Valor recebido (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div>
+    <div class="f"><label>Data</label><input id="dt" type="date" value="${esc(r.data||hoje)}"></div>
+    <div class="f"><label>Observação (opcional)</label><input id="d" value="${esc(r.descricao||'')}" placeholder="Ex.: Pix, parte da fatura de novembro"></div>
+    ${isNew?`<label style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;font-size:14px"><input type="checkbox" id="g" checked style="width:18px;height:18px"> Colocar esse dinheiro no guardado para contas e dívidas</label>`:(r.reservaRef?'<p class="small muted">Esse pagamento entrou no guardado para contas; ao apagar, sai de lá também.</p>':'')}
+    ${!isNew?`<p class="small muted">${metaLine(r)}</p>`:''}
+    <div class="err"></div>
+    <div class="actions">${!isNew?'<button class="btn danger" id="del">Apagar</button>':'<span></span>'}<span class="actions"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="save">Salvar</button></span></div>`, ov=>{
+    ov.querySelector('#save').onclick = async ()=>{
+      const pessoa = ov.querySelector('#p').value.trim(), valor = parseBRL(ov.querySelector('#v').value), data = ov.querySelector('#dt').value || hoje, descricao = ov.querySelector('#d').value.trim();
+      if (!pessoa || !(valor>0)) { ov.querySelector('.err').textContent='Informe quem pagou e o valor.'; return; }
+      ov.querySelector('#save').disabled = true;
+      try{
+        const d = {pessoa, valor, data, mes: data.slice(0,7), descricao};
+        if (isNew){
+          let reservaRef = null;
+          if (ov.querySelector('#g').checked) reservaRef = await addDoc('reserva', {tipo:'deposito', caixinha:'contas', valor, data, mes:data.slice(0,7), descricao:`Pagamento de ${pessoa}`});
+          await addDoc('recebimentos', {...d, reservaRef});
+        } else {
+          await updDoc('recebimentos', r.id, d);
+          if (r.reservaRef && S.reserva.find(x=>x.id===r.reservaRef)) await updDoc('reserva', r.reservaRef, {valor, data, mes:data.slice(0,7), descricao:`Pagamento de ${pessoa}`});
+        }
+        tercSel = pessoa; closeModal();
+      }catch(e){ ov.querySelector('.err').textContent = writeErr(e); ov.querySelector('#save').disabled=false; }
+    };
+    const del = ov.querySelector('#del'); if (del) del.onclick = ()=> confirmBox('Apagar pagamento?', `${esc(r.pessoa)} — ${brl(r.valor)}`, 'Apagar', async()=>{ if (r.reservaRef) await delDoc('reserva', r.reservaRef); await delDoc('recebimentos', r.id); }, true);
   });
 }
 
@@ -431,28 +518,29 @@ function togglePago(kind, obj, valor, nome){
   if (!canWrite) return;
   const isPago = kind==='conta' ? obj.status==='pago' : obj.pago;
   if (isPago){
-    return confirmBox('Voltar para “A pagar”?', `${esc(nome)} — ${brl(valor)}${obj.reservaRef?'<br>O valor tirado do guardado volta para a reserva.':''}`, 'Voltar para A pagar', async()=>{
+    return confirmBox('Voltar para “A pagar”?', `${esc(nome)} — ${brl(valor)}${obj.reservaRef?'<br>O valor tirado do guardado volta para a caixinha.':''}`, 'Voltar para A pagar', async()=>{
       const ref = kind==='conta' ? obj.reservaRef : (obj.doc && obj.doc.reservaRef);
       if (ref) await delDoc('reserva', ref);
       if (kind==='conta') await updDoc('contas', obj.id, {status:'apagar', reservaRef:null});
       else await setFatura(mes, obj.cartao, {pago:false, reservaRef:null});
     });
   }
-  const saldo = saldoReserva();
+  const saldo = saldoReserva('contas'), saldoE = saldoReserva('emergencia');
   openModal(`<h2>Marcar como pago</h2>
     <p><b>${esc(nome)}</b> — ${brl(valor)}</p>
-    <p class="muted small">Dinheiro guardado agora: <b>${brl(saldo)}</b>${saldo < valor ? ' (não cobre tudo)' : ''}</p>
+    <p class="muted small">Guardado para contas: <b>${brl(saldo)}</b>${saldo < valor ? ' (não cobre tudo)' : ''} · Emergência: <b>${brl(saldoE)}</b></p>
     <div class="err"></div>
     <div class="actions" style="flex-direction:column;align-items:stretch">
-      <button class="btn pri" id="res">Pago usando o dinheiro guardado</button>
+      <button class="btn pri" id="res">Pago com o guardado para contas</button>
       <button class="btn" id="sem">Pago (sem mexer no guardado)</button>
+      <button class="btn" id="eme" style="color:var(--warn)">Pago com a reserva de emergência</button>
       <button class="btn" data-close>Cancelar</button>
     </div>`, ov=>{
-    const go = async (useRes)=>{
+    const go = async (useRes, cx)=>{
       ov.querySelectorAll('button').forEach(b=>b.disabled=true);
       try{
         let reservaRef = null;
-        if (useRes) reservaRef = await addDoc('reserva', {tipo:'retirada', valor, descricao:'Pagamento: '+nome, data:new Date().toISOString().slice(0,10), mes});
+        if (useRes) reservaRef = await addDoc('reserva', {tipo:'retirada', caixinha: cx||'contas', valor, descricao:'Pagamento: '+nome, data:new Date().toISOString().slice(0,10), mes});
         if (kind==='conta') await updDoc('contas', obj.id, {status:'pago', reservaRef});
         else await setFatura(mes, obj.cartao, {pago:true, reservaRef, valorPago: valor});
         closeModal();
@@ -460,22 +548,7 @@ function togglePago(kind, obj, valor, nome){
     };
     ov.querySelector('#res').onclick = ()=>go(true);
     ov.querySelector('#sem').onclick = ()=>go(false);
-  });
-}
-
-async function toggleRecebido(it, idx){
-  if (!canWrite) return;
-  const terceiros = (it.terceiros||[]).map((t,i)=> i===idx ? {...t, recebido: !t.recebido} : t);
-  try { await updDoc('cartao', it.id, {terceiros}); } catch(e){ showToast(writeErr(e)); }
-}
-function receberTudo(p){
-  const pend = p.itens.filter(x=>!x.t.recebido);
-  confirmBox(`Marcar tudo de ${p.nome} como recebido?`, `${pend.length} ${pend.length===1?'item':'itens'} · ${brl(p.pendente)}`, 'Marcar recebido', async()=>{
-    const byDoc = new Map(); pend.forEach(x=>byDoc.set(x.it.id, x.it));
-    for (const it of byDoc.values()){
-      const terceiros = it.terceiros.map(t => (t.nome||'').trim()===p.nome ? {...t, recebido:true} : t);
-      await updDoc('cartao', it.id, {terceiros});
-    }
+    ov.querySelector('#eme').onclick = ()=>go(true, 'emergencia');
   });
 }
 
@@ -512,11 +585,11 @@ let toastT; function showToast(msg){ const b=$('#banner'); b.innerHTML=`<div cla
 
 /* ---------- views ---------- */
 function vResumo(){
-  const D = monthData(mes); const saldo = saldoReserva();
+  const D = monthData(mes); const saldo = saldoReserva('contas'), saldoE = saldoReserva('emergencia');
   const cobre = D.apagar>0 ? Math.min(100, saldo/D.apagar*100) : 100;
   const dif = r2(saldo - D.apagar);
   const proximas = [...D.fatCasa.filter(f=>!f.pago).map(f=>({n:'Fatura '+f.cartao, v:f.casa, dia:null})), ...D.contas.filter(c=>c.status!=='pago').map(c=>({n:c.descricao, v:c.valor, dia:c.dia}))].sort((a,b)=>(a.dia||99)-(b.dia||99));
-  const pend = D.pessoas.filter(p=>p.pendente>0.004);
+  const pend = tercData().filter(p=>p.saldo>0.004);
   // quem lançou
   const cont = {}; [...D.contas, ...D.entradas, ...D.itens].forEach(d=>{ const k=who(d.createdBy); cont[k]=(cont[k]||0)+1; });
   // histórico
@@ -535,13 +608,15 @@ function vResumo(){
     <div class="stat"><div class="k">⏳ Falta pagar</div><div class="v" style="color:var(--warn)">${brl(D.apagar)}</div></div>
   </div>
   <div class="card">
-    <h3>🐷 Guardado para pagar as contas <a href="#reserva" class="small" style="color:var(--accent);text-transform:none;letter-spacing:0">ver →</a></h3>
+    <h3>🧾 Guardado para contas e dívidas <a href="#reserva" class="small" style="color:var(--accent);text-transform:none;letter-spacing:0">ver →</a></h3>
     <div class="big">${brl(saldo)}</div>
     <div class="bar"><i style="width:${cobre.toFixed(0)}%"></i></div>
     <div class="small">${D.apagar<=0 ? 'Tudo deste mês já está pago. 🎉' : dif>=0 ? `Cobre tudo o que falta pagar (${brl(D.apagar)}) e ainda sobram <b class="pos">${brl(dif)}</b>.` : `Falta pagar ${brl(D.apagar)} — ainda faltam <b class="neg">${brl(-dif)}</b> para cobrir tudo.`}</div>
   </div>
-  ${pend.length?`<div class="card"><h3>👤 A receber de terceiros <a href="#cartoes" class="small" style="color:var(--accent);text-transform:none;letter-spacing:0">ver →</a></h3>
-    ${pend.map(p=>`<div class="row"><div class="main"><div class="t">${esc(p.nome)}</div><div class="s">${p.itens.length} itens no cartão</div></div><div class="val" style="color:var(--blue)">${brl(p.pendente)}</div></div>`).join('')}</div>`:''}
+  <div class="card"><h3>🛟 Reserva de emergência <a href="#reserva" class="small" style="color:var(--accent);text-transform:none;letter-spacing:0">ver →</a></h3>
+    <div class="big" style="font-size:24px">${brl(saldoE)}</div><div class="small muted">Separada das contas — não entra no cálculo acima.</div></div>
+  ${pend.length?`<div class="card"><h3>👥 Terceiros — saldo em aberto <a href="#terceiros" class="small" style="color:var(--accent);text-transform:none;letter-spacing:0">ver →</a></h3>
+    ${pend.map(p=>`<div class="row"><div class="main"><div class="t">${esc(p.nome)}</div><div class="s">deve ${brl(p.total)} no total · já pagou ${brl(p.pago)}</div></div><div class="val" style="color:var(--blue)">${brl(p.saldo)}</div></div>`).join('')}</div>`:''}
   ${D.beneficio>0?`<div class="card"><h3>🍽️ VR / VA do mês</h3><div class="big" style="font-size:22px">${brl(D.beneficio)}</div><div class="small muted">Não entra na conta da sobra em dinheiro.</div></div>`:''}
   <div class="card"><h3>⏳ Ainda a pagar</h3>
     ${proximas.length ? proximas.slice(0,8).map(p=>`<div class="row"><div class="main"><div class="t">${esc(p.n)}</div>${p.dia?`<div class="s">vence dia ${p.dia}</div>`:''}</div><div class="val">${brl(p.v)}</div></div>`).join('') + (proximas.length>8?`<div class="small muted" style="padding-top:6px">+ ${proximas.length-8} outras em Contas</div>`:'') : '<div class="empty">Nada pendente neste mês.</div>'}
@@ -576,7 +651,7 @@ function itemRow(it){
   return `<div class="row click" data-item="${it.id}">
     <div class="main"><div class="t">${esc(it.descricao)}</div>
       <div class="s">${fm}${it.parcTotal?`<span class="tag">${it.parcAtual}/${it.parcTotal}</span>`:''}${it.recorrente?'<span class="tag">Todo mês</span>':''}
-      ${(it.terceiros||[]).map((t,i)=>`<span class="tag third ${t.recebido?'ok':''}" data-rc="${it.id}" data-i="${i}" title="Tocar para marcar recebido">👤 ${esc(t.nome)} ${brl(t.valor)}${t.recebido?' ✓':''}</span>`).join('')}
+      ${(it.terceiros||[]).map((t,i)=>`<span class="tag third">👤 ${esc(t.nome)} ${brl(t.valor)}</span>`).join('')}
       <span>${metaLine(it)}</span></div></div>
     <div class="val">${brl(it.valor)}</div>
   </div>`;
@@ -592,13 +667,7 @@ function vCartoes(){
   const totFat = r2(D.faturas.reduce((a,f)=>a+f.total,0));
   return `
   <div class="chips">${chips.map(c=>`<button class="chip ${c===cardFilter?'on':''}" data-cf="${esc(c)}">${c===AV?'🛒 '+c:esc(c)}</button>`).join('')}${canWrite?'<button class="chip" id="addCard">+ cartão</button>':''}</div>
-  <div class="card" style="border-color:var(--blue)">
-    <h3 style="color:var(--blue)">👤 Dívidas de terceiros neste mês</h3>
-    ${D.pessoas.length ? D.pessoas.map(p=>`<div class="person"><div class="top"><div><div class="nm">${esc(p.nome)}</div><div class="small muted">deve ${brl(p.total)} · recebido ${brl(p.recebido)}</div></div>
-      <div style="text-align:right"><div style="font-weight:800;color:${p.pendente>0.004?'var(--blue)':'var(--accent)'}">${p.pendente>0.004?brl(p.pendente):'Quitado ✓'}</div>
-      ${p.pendente>0.004&&canWrite?`<button class="btn sm" data-rt="${esc(p.nome)}" style="margin-top:4px">Recebi tudo</button>`:''}</div></div></div>`).join('')
-      : '<div class="empty" style="padding:6px">Nenhum gasto marcado para terceiros. Ao lançar um gasto (cartão, débito, Pix…), use o campo “Dívida de terceiros”.</div>'}
-  </div>
+  ${D.pessoas.length?`<div class="small" style="margin:0 2px 8px;color:var(--blue)">👥 Neste mês há ${brl(D.pessoas.reduce((a,p)=>a+p.total,0))} de terceiros nesses gastos (fora da conta da casa). <a href="#terceiros" style="color:var(--blue);font-weight:700">Ver aba Terceiros →</a></div>`:''}
   <div class="small muted" style="margin:0 2px 10px">No mês: faturas <b>${brl(totFat)}</b> · débito/Pix/dinheiro <b>${brl(D.avTotal)}</b></div>
   ${showAv?`<div class="card">
     <h3><span>🛒 Débito / Pix / Dinheiro</span><span class="pill pago">Já pago</span></h3>
@@ -621,29 +690,73 @@ function vCartoes(){
     ${f.itens.length ? sortItens(f.itens).map(itemRow).join('') : '<div class="empty">Nenhuma compra neste cartão.</div>'}
     ${canWrite?`<div style="padding-top:8px"><button class="btn sm" data-addin="${esc(f.cartao)}">+ Compra no ${esc(f.cartao)}</button></div>`:''}
   </div>`).join('')}
-  <div class="small muted" style="margin:4px 2px">Dica: toque na etiqueta azul 👤 de um item para marcar só ele como recebido.</div>`;
+  `;
+}
+function vTerceiros(){
+  const T = tercData();
+  if (!T.length) return `<div class="card"><h3>👥 Terceiros</h3><div class="empty">Ninguém deve nada por enquanto. Quando lançar um gasto que é de outra pessoa, preencha “Dívida de terceiros” no formulário do gasto — ele aparece aqui.</div></div>`;
+  if (!tercSel || !T.find(p=>p.nome===tercSel)) tercSel = T[0].nome;
+  const p = T.find(x=>x.nome===tercSel);
+  const itensMes = p.itens.filter(x=>x.it.mes===mes).sort((a,b)=>(a.it.createdAt||'').localeCompare(b.it.createdAt||''));
+  const pagsMes = p.pags.filter(r=>r.mes===mes).sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+  const pm = p.porMes.find(x=>x.m===mes) || {div:0, pag:0};
+  const meio = it => isCred(it) ? 'Cartão '+(it.cartao||'') : (FORMAS[it.forma]||it.forma);
+  return `
+  <div class="chips">${T.map(x=>`<button class="chip ${x.nome===tercSel?'on':''}" data-tp="${esc(x.nome)}">${esc(x.nome)}${x.saldo>0.004?` · ${brl(x.saldo)}`:' ✓'}</button>`).join('')}</div>
+  <div class="card" style="border-color:var(--blue)">
+    <h3 style="color:var(--blue)">👤 ${esc(p.nome)} — saldo em aberto</h3>
+    <div class="big" style="color:${p.saldo>0.004?'var(--blue)':'var(--accent)'}">${p.saldo>0.004?brl(p.saldo):(p.saldo<-0.004?'Crédito de '+brl(-p.saldo):'Quitado ✓')}</div>
+    <div class="small muted">Total de compras no nome dele: ${brl(p.total)} · já pagou: ${brl(p.pago)}</div>
+    ${canWrite?`<div class="actions" style="margin-top:10px"><button class="btn pri sm" data-novopag="${esc(p.nome)}">+ Registrar pagamento</button>${p.saldo>0.004?`<button class="btn sm" data-quitar="${esc(p.nome)}">Quitou tudo (${brl(p.saldo)})</button>`:''}</div>`:''}
+  </div>
+  <div class="grid" style="margin-bottom:12px">
+    <div class="stat"><div class="k">Compras em ${esc(MESES[+mes.slice(5)-1])}</div><div class="v">${brl(pm.div)}</div></div>
+    <div class="stat"><div class="k">Pago em ${esc(MESES[+mes.slice(5)-1])}</div><div class="v pos">${brl(pm.pag)}</div></div>
+  </div>
+  <div class="sec-h"><b>💸 Pagamentos recebidos</b><span class="muted">${esc(mesLabel(mes))}</span></div>
+  <div class="card">
+    ${pagsMes.length ? pagsMes.map(r=>`<div class="row click" data-pag="${r.id}"><div class="main"><div class="t">${esc(r.descricao||'Pagamento')}</div><div class="s"><span>${r.data?r.data.split('-').reverse().join('/'):''}</span>${r.reservaRef?'<span class="tag ok">foi para o guardado</span>':''}<span>${metaLine(r)}</span></div></div><div class="val pos">+ ${brl(r.valor)}</div></div>`).join('') : '<div class="empty">Nenhum pagamento registrado neste mês.</div>'}
+  </div>
+  <div class="sec-h"><b>🧾 Compras no nome de ${esc(p.nome)}</b><span class="muted">${esc(mesLabel(mes))}</span></div>
+  <div class="card">
+    ${itensMes.length ? itensMes.map(x=>`<div class="row click" data-item="${x.it.id}"><div class="main"><div class="t">${esc(x.it.descricao)}</div><div class="s"><span class="tag">${esc(meio(x.it))}</span>${x.it.parcTotal?`<span class="tag">${x.it.parcAtual}/${x.it.parcTotal}</span>`:''}${x.t.recebido?'<span class="tag ok">pago ✓</span>':''}${x.t.valor<x.it.valor?`<span>parte dele de ${brl(x.it.valor)}</span>`:''}</div></div><div class="val">${brl(x.t.valor)}</div></div>`).join('') : '<div class="empty">Nenhuma compra no nome dele neste mês.</div>'}
+  </div>
+  <div class="card"><h3>📅 Histórico</h3><table><tr><th>Mês</th><th>Compras</th><th>Pago</th><th>Saldo</th></tr>
+    ${p.porMes.slice().reverse().map(x=>`<tr style="cursor:pointer" data-mes="${x.m}"><td>${x.m===mes?'<b>':''}${mesCurto(x.m)}${x.m===mes?'</b>':''}</td><td>${brl(x.div)}</td><td class="pos">${x.pag?brl(x.pag):'—'}</td><td class="${x.saldo>0.004?'neg':'pos'}">${x.saldo>0.004?brl(x.saldo):'—'}</td></tr>`).join('')}</table>
+    <div class="small muted" style="margin-top:6px">Saldo = acumulado até o mês (compras − pagamentos).</div></div>`;
 }
 function vReserva(){
-  const saldo = saldoReserva(); const D = monthData(mes);
-  const movs = [...S.reserva].sort((a,b)=>(b.data||'').localeCompare(a.data||'') || (b.createdAt||'').localeCompare(a.createdAt||''));
-  const dif = r2(saldo - D.apagar);
+  const sC = saldoReserva('contas'), sE = saldoReserva('emergencia'); const D = monthData(mes);
+  const movs = [...S.reserva].filter(r=>resFilter==='todas' || cxOf(r)===resFilter).sort((a,b)=>(b.data||'').localeCompare(a.data||'') || (b.createdAt||'').localeCompare(a.createdAt||''));
+  const dif = r2(sC - D.apagar);
   return `
-  <div class="card">
-    <h3>🐷 Dinheiro guardado para as contas</h3>
-    <div class="big">${brl(saldo)}</div>
-    <div class="small muted" style="margin-top:4px">Falta pagar em ${mesLabel(mes)}: <b>${brl(D.apagar)}</b> → ${dif>=0?`<b class="pos">sobra ${brl(dif)}</b>`:`<b class="neg">faltam ${brl(-dif)}</b>`}</div>
-    ${canWrite?`<div class="actions" style="margin-top:12px"><button class="btn pri" id="guardar">+ Guardar</button><button class="btn" id="retirar">− Retirar</button></div>`:''}
-    <div class="small muted" style="margin-top:10px">Ao marcar uma conta como paga, você pode escolher “pago usando o dinheiro guardado” e a retirada é lançada aqui sozinha.</div>
+  <div class="card" style="text-align:center">
+    <div class="small muted" style="font-weight:700">TOTAL GUARDADO</div>
+    <div class="big">${brl(r2(sC+sE))}</div>
   </div>
-  <div class="sec-h"><b>Movimentos</b><span class="muted">${movs.length}</span></div>
   <div class="card">
-    ${movs.length ? movs.map(r=>`<div class="row click" data-res="${r.id}"><div class="main"><div class="t">${esc(r.descricao || (r.tipo==='retirada'?'Retirada':'Guardado'))}</div><div class="s"><span>${r.data?r.data.split('-').reverse().join('/'):''}</span><span>${metaLine(r)}</span></div></div><div class="val ${r.tipo==='retirada'?'neg':'pos'}">${r.tipo==='retirada'?'−':'+'} ${brl(r.valor)}</div></div>`).join('') : '<div class="empty">Ainda não há nada guardado. Toque em “+ Guardar” para registrar o valor que vocês separaram.</div>'}
+    <h3>🧾 Para contas e dívidas</h3>
+    <div class="big" style="font-size:26px">${brl(sC)}</div>
+    <div class="small muted" style="margin-top:4px">Falta pagar em ${mesLabel(mes)}: <b>${brl(D.apagar)}</b> → ${dif>=0?`<b class="pos">sobra ${brl(dif)}</b>`:`<b class="neg">faltam ${brl(-dif)}</b>`}</div>
+    ${canWrite?`<div class="actions" style="margin-top:10px"><button class="btn sm pri" data-rg="contas">+ Guardar</button><button class="btn sm" data-rr="contas">− Retirar</button></div>`:''}
+  </div>
+  <div class="card">
+    <h3>🛟 Emergência</h3>
+    <div class="big" style="font-size:26px">${brl(sE)}</div>
+    <div class="small muted" style="margin-top:4px">Dinheiro para imprevistos. Fica fora da conta das despesas do mês.</div>
+    ${canWrite?`<div class="actions" style="margin-top:10px"><button class="btn sm pri" data-rg="emergencia">+ Guardar</button><button class="btn sm" data-rr="emergencia">− Retirar</button></div>`:''}
+  </div>
+  ${canWrite?`<div style="margin:-2px 0 12px"><button class="btn sm" id="transf">⇄ Transferir entre caixinhas</button></div>`:''}
+  <div class="small muted" style="margin:0 2px 10px">Ao marcar uma conta como paga, dá para escolher “pago com o guardado para contas” (ou com a emergência) e a retirada é lançada aqui sozinha.</div>
+  <div class="chips">${[['todas','Todos'],['contas','🧾 Contas'],['emergencia','🛟 Emergência']].map(([k,l])=>`<button class="chip ${k===resFilter?'on':''}" data-rf="${k}">${l}</button>`).join('')}</div>
+  <div class="card">
+    ${movs.length ? movs.map(r=>`<div class="row click" data-res="${r.id}"><div class="main"><div class="t">${esc(r.descricao || (r.tipo==='retirada'?'Retirada':'Guardado'))}</div><div class="s"><span class="tag">${cxOf(r)==='emergencia'?'🛟 Emergência':'🧾 Contas'}</span><span>${r.data?r.data.split('-').reverse().join('/'):''}</span><span>${metaLine(r)}</span></div></div><div class="val ${r.tipo==='retirada'?'neg':'pos'}">${r.tipo==='retirada'?'−':'+'} ${brl(r.valor)}</div></div>`).join('') : '<div class="empty">Nenhum movimento ainda. Toque em “+ Guardar” para registrar o que vocês separaram.</div>'}
   </div>`;
 }
 function vAtividade(){
   const all = [];
-  const label = {contas:'conta', entradas:'entrada', cartao:'gasto', reserva:'movimento do guardado'};
-  for (const c of ['contas','entradas','cartao','reserva']) for (const d of S[c]) {
+  const label = {contas:'conta', entradas:'entrada', cartao:'gasto', reserva:'movimento do guardado', recebimentos:'pagamento recebido'};
+  for (const c of ['contas','entradas','cartao','reserva','recebimentos']) for (const d of S[c]) {
     if (d.createdBy && d.createdBy!=='planilha' && d.createdAt) all.push({t:d.createdAt, by:d.createdBy, acao:'adicionou', c, d});
     if (d.updatedBy && d.updatedAt) all.push({t:d.updatedAt, by:d.updatedBy, acao:'editou', c, d});
   }
@@ -652,7 +765,7 @@ function vAtividade(){
   if (actFilter!=='Todos' && !pessoas.includes(actFilter)) actFilter='Todos';
   const list = all.filter(a=>actFilter==='Todos'||who(a.by)===actFilter).sort((a,b)=>b.t.localeCompare(a.t)).slice(0,80);
   const desc = a => a.c==='faturas' ? `a fatura ${esc(a.d.cartao)} de ${mesCurto(a.d.mes)}` :
-    `${label[a.c]} <b>${esc(a.d.descricao||'')}</b> ${a.c==='cartao'?`(${a.d.cartao&&isCred(a.d)?esc(a.d.cartao):(FORMAS[a.d.forma]||'')}) `:''}· ${brl(a.d.valor)}${a.d.mes?` · ${mesCurto(a.d.mes)}`:''}${(a.d.terceiros||[]).length?` · 👤 ${a.d.terceiros.map(t=>esc(t.nome)).join(', ')}`:''}`;
+    `${label[a.c]} <b>${esc(a.c==='recebimentos'?('de '+a.d.pessoa):(a.d.descricao||''))}</b> ${a.c==='cartao'?`(${a.d.cartao&&isCred(a.d)?esc(a.d.cartao):(FORMAS[a.d.forma]||'')}) `:''}· ${brl(a.d.valor)}${a.d.mes?` · ${mesCurto(a.d.mes)}`:''}${a.c==='reserva'?` · ${cxOf(a.d)==='emergencia'?'🛟 Emergência':'🧾 Contas'}`:''}${(a.d.terceiros||[]).length?` · 👤 ${a.d.terceiros.map(t=>esc(t.nome)).join(', ')}`:''}`;
   return `
   ${pessoas.length>1?`<div class="chips">${['Todos',...pessoas].map(p=>`<button class="chip ${p===actFilter?'on':''}" data-af="${esc(p)}">${esc(p)}</button>`).join('')}</div>`:''}
   <div class="card"><h3>🕑 Últimos lançamentos e alterações</h3>
@@ -663,39 +776,43 @@ function vAtividade(){
 
 /* ---------- render ---------- */
 let phase = 'loading'; // config | login | loading | app | notmember | visitor
-let visitante = null, dividas = [], visErr = '';
+let visitante = null, dividas = [], pagsVis = [], visErr = '';
 async function loadVisitante(){
-  const {data, error} = await sb.rpc('minhas_dividas');
-  if (error){ visErr = 'Não foi possível carregar: ' + error.message; return; }
-  visErr = ''; dividas = data || [];
+  const [r1, r2_] = await Promise.all([sb.rpc('minhas_dividas'), sb.rpc('meus_pagamentos')]);
+  if (r1.error){ visErr = 'Não foi possível carregar: ' + r1.error.message; return; }
+  visErr = ''; dividas = r1.data || []; pagsVis = (r2_ && !r2_.error && r2_.data) || [];
 }
 function vVisitante(){
-  const mesesCom = [...new Set(dividas.map(d=>d.mes))].sort();
-  const doMes = dividas.filter(d=>d.mes===mes);
-  const tot = r2(doMes.reduce((a,d)=>a+(+d.valor||0),0));
-  const rec = r2(doMes.filter(d=>d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
-  const pendGeral = r2(dividas.filter(d=>!d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
-  const pendMeses = [...new Set(dividas.filter(d=>!d.recebido).map(d=>d.mes))].sort();
+  const meses = [...new Set([...dividas.map(d=>d.mes), ...pagsVis.map(p=>p.mes)])].filter(Boolean).sort();
+  let acc = 0;
+  const porMes = meses.map(m=>{ const div = r2(dividas.filter(d=>d.mes===m).reduce((a,d)=>a+(+d.valor||0),0));
+    const pag = r2(dividas.filter(d=>d.mes===m&&d.recebido).reduce((a,d)=>a+(+d.valor||0),0) + pagsVis.filter(p=>p.mes===m).reduce((a,p)=>a+(+p.valor||0),0));
+    acc = r2(acc+div-pag); return {m, div, pag, saldo:acc}; });
+  const total = r2(dividas.reduce((a,d)=>a+(+d.valor||0),0));
+  const pago = r2(dividas.filter(d=>d.recebido).reduce((a,d)=>a+(+d.valor||0),0) + pagsVis.reduce((a,p)=>a+(+p.valor||0),0));
+  const saldo = r2(total-pago);
+  const doMes = dividas.filter(d=>d.mes===mes), pagMes = pagsVis.filter(p=>p.mes===mes);
+  const pm = porMes.find(x=>x.m===mes) || {div:0,pag:0};
+  const nomeMes = MESES[+mes.slice(5)-1];
   return `
   ${visErr?`<div class="banner">${esc(visErr)}</div>`:''}
-  <div class="card">
-    <h3>👤 Olá, ${esc(visitante)}</h3>
-    <div class="small muted">Aqui aparecem só as compras que estão no seu nome. Esta tela é apenas para consulta.</div>
+  <div class="card" style="border-color:var(--blue)">
+    <h3 style="color:var(--blue)">👤 Olá, ${esc(visitante)} — seu saldo em aberto</h3>
+    <div class="big" style="color:${saldo>0.004?'var(--blue)':'var(--accent)'}">${saldo>0.004?brl(saldo):'Quitado ✓'}</div>
+    <div class="small muted">Total de compras no seu nome: ${brl(total)} · você já pagou: ${brl(pago)}. Esta tela é só para consulta.</div>
   </div>
   <div class="grid" style="margin-bottom:12px">
-    <div class="stat"><div class="k">Total em ${esc(MESES[+mes.slice(5)-1])}</div><div class="v">${brl(tot)}</div></div>
-    <div class="stat"><div class="k">Falta pagar no mês</div><div class="v" style="color:${tot-rec>0.004?'var(--warn)':'var(--accent)'}">${tot-rec>0.004?brl(tot-rec):'Quitado ✓'}</div></div>
+    <div class="stat"><div class="k">Compras em ${esc(nomeMes)}</div><div class="v">${brl(pm.div)}</div></div>
+    <div class="stat"><div class="k">Pago em ${esc(nomeMes)}</div><div class="v pos">${brl(pm.pag)}</div></div>
   </div>
-  ${pendGeral>0.004?`<div class="card"><h3>⏳ Total pendente (todos os meses)</h3><div class="big" style="font-size:24px;color:var(--warn)">${brl(pendGeral)}</div>
-    <div class="actions" style="margin-top:8px">${pendMeses.map(m=>`<button class="chip ${m===mes?'on':''}" data-vm="${m}">${mesCurto(m)}</button>`).join('')}</div></div>`:''}
+  ${pagMes.length?`<div class="card"><h3>💸 Seus pagamentos em ${esc(nomeMes)}</h3>${pagMes.map(p=>`<div class="row"><div class="main"><div class="t">${esc(p.descricao||'Pagamento')}</div><div class="s">${p.data?p.data.split('-').reverse().join('/'):''}</div></div><div class="val pos">${brl(p.valor)}</div></div>`).join('')}</div>`:''}
   <div class="card"><h3>🧾 Compras de ${esc(mesLabel(mes))}</h3>
     ${doMes.length ? doMes.map(d=>`<div class="row"><div class="main"><div class="t">${esc(d.descricao)}</div>
-      <div class="s"><span class="tag">${esc(d.meio)}</span>${d.parc_total?`<span class="tag">${d.parc_atual}/${d.parc_total}</span>`:''}${d.recebido?'<span class="tag ok">Pago ✓</span>':'<span class="tag" style="background:var(--warn-soft);color:var(--warn)">Pendente</span>'}</div></div>
+      <div class="s"><span class="tag">${esc(d.meio)}</span>${d.parc_total?`<span class="tag">${d.parc_atual}/${d.parc_total}</span>`:''}${d.recebido?'<span class="tag ok">pago ✓</span>':''}</div></div>
       <div class="val">${brl(d.valor)}</div></div>`).join('') : '<div class="empty">Nenhuma compra no seu nome neste mês.</div>'}
   </div>
-  ${mesesCom.length?`<div class="card"><h3>📅 Meses</h3><table><tr><th>Mês</th><th>Total</th><th>Pendente</th></tr>
-    ${mesesCom.slice().reverse().map(m=>{ const ds=dividas.filter(d=>d.mes===m); const t=r2(ds.reduce((a,d)=>a+(+d.valor||0),0)); const pd=r2(ds.filter(d=>!d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
-      return `<tr style="cursor:pointer" data-vm="${m}"><td>${m===mes?'<b>':''}${mesCurto(m)}${m===mes?'</b>':''}</td><td>${brl(t)}</td><td class="${pd>0.004?'neg':'pos'}">${pd>0.004?brl(pd):'—'}</td></tr>`; }).join('')}</table></div>`:''}
+  ${porMes.length?`<div class="card"><h3>📅 Histórico</h3><table><tr><th>Mês</th><th>Compras</th><th>Pago</th><th>Saldo</th></tr>
+    ${porMes.slice().reverse().map(x=>`<tr style="cursor:pointer" data-vm="${x.m}"><td>${x.m===mes?'<b>':''}${mesCurto(x.m)}${x.m===mes?'</b>':''}</td><td>${brl(x.div)}</td><td class="pos">${x.pag?brl(x.pag):'—'}</td><td class="${x.saldo>0.004?'neg':'pos'}">${x.saldo>0.004?brl(x.saldo):'—'}</td></tr>`).join('')}</table></div>`:''}
   <div style="text-align:center;margin-top:6px"><button class="btn sm" id="vref">↻ Atualizar</button></div>`;
 }
 let session = null, authMsg = '';
@@ -746,9 +863,9 @@ function render(){
   else if (phase==='notmember') v.innerHTML = vNotMember();
   else if (phase==='visitor') v.innerHTML = vVisitante();
   else if (phase==='loading') v.innerHTML = '<div class="empty">Carregando…</div>';
-  else v.innerHTML = ({resumo:vResumo, contas:vContas, cartoes:vCartoes, reserva:vReserva, atividade:vAtividade}[tab])();
+  else v.innerHTML = ({resumo:vResumo, contas:vContas, cartoes:vCartoes, terceiros:vTerceiros, reserva:vReserva, atividade:vAtividade}[tab])();
   const fab = $('#fab');
-  const fabs = {contas:['+ Conta', ()=>formConta()], cartoes:['+ Lançar gasto', ()=>formItem()], reserva:['+ Guardar', ()=>formReserva()], resumo:['+ Lançar gasto', ()=>formItem()]};
+  const fabs = {contas:['+ Conta', ()=>formConta()], cartoes:['+ Lançar gasto', ()=>formItem()], reserva:['+ Guardar', ()=>formReserva()], terceiros:['+ Pagamento recebido', ()=>formPagamento(null, tercSel)], resumo:['+ Lançar gasto', ()=>formItem()]};
   if (inApp && canWrite && fabs[tab]) { fab.hidden=false; fab.textContent=fabs[tab][0]; fab.onclick=fabs[tab][1]; } else fab.hidden=true;
   if (phase==='login') bindLogin(v);
   if (phase==='notmember') v.querySelector('#logout2').onclick = logout;
@@ -802,19 +919,24 @@ function bindView(v){
   v.querySelectorAll('[data-cf]').forEach(el=>el.onclick=()=>{ cardFilter=el.dataset.cf; render(); });
   v.querySelectorAll('[data-af]').forEach(el=>el.onclick=()=>{ actFilter=el.dataset.af; render(); });
   v.querySelectorAll('[data-item]').forEach(el=>el.onclick=()=>{ const it=S.cartao.find(x=>x.id===el.dataset.item); if(it&&canWrite) formItem(it); });
-  v.querySelectorAll('[data-rc]').forEach(el=>el.onclick=(ev)=>{ ev.stopPropagation(); const it=S.cartao.find(x=>x.id===el.dataset.rc); if(it) toggleRecebido(it, +el.dataset.i); });
-  v.querySelectorAll('[data-rt]').forEach(el=>el.onclick=()=>{ const p=D().pessoas.find(x=>x.nome===el.dataset.rt); if(p) receberTudo(p); });
+  v.querySelectorAll('[data-tp]').forEach(el=>el.onclick=()=>{ tercSel=el.dataset.tp; render(); });
+  v.querySelectorAll('[data-pag]').forEach(el=>el.onclick=()=>{ const r=S.recebimentos.find(x=>x.id===el.dataset.pag); if(r&&canWrite) formPagamento(r); });
+  v.querySelectorAll('[data-novopag]').forEach(el=>el.onclick=()=>formPagamento(null, el.dataset.novopag));
+  v.querySelectorAll('[data-quitar]').forEach(el=>el.onclick=()=>{ const p=tercData().find(x=>x.nome===el.dataset.quitar); if(p) formPagamento(null, p.nome, p.saldo); });
   v.querySelectorAll('[data-addin]').forEach(el=>el.onclick=()=>formItem(null, el.dataset.addin));
   v.querySelectorAll('[data-res]').forEach(el=>el.onclick=()=>{ const r=S.reserva.find(x=>x.id===el.dataset.res); if(r&&canWrite) formReserva(r); });
   const on = (id, fn) => { const el = v.querySelector('#'+id); if (el) el.onclick = fn; };
   on('addEnt', ()=>formEntrada()); on('addConta', ()=>formConta()); on('copiar', copiarMes); on('addCard', addCartao);
-  on('guardar', ()=>formReserva(null,'deposito')); on('retirar', ()=>formReserva(null,'retirada'));
+  v.querySelectorAll('[data-rg]').forEach(el=>el.onclick=()=>formReserva(null,'deposito',el.dataset.rg));
+  v.querySelectorAll('[data-rr]').forEach(el=>el.onclick=()=>formReserva(null,'retirada',el.dataset.rr));
+  v.querySelectorAll('[data-rf]').forEach(el=>el.onclick=()=>{ resFilter=el.dataset.rf; render(); });
+  on('transf', formTransfer);
 }
 
 /* ---------- nav ---------- */
 $('#prev').onclick = ()=>{ mes = addMonth(mes,-1); render(); };
 $('#next').onclick = ()=>{ mes = addMonth(mes, 1); render(); };
-function fromHash(){ const h = location.hash.replace('#',''); tab = ['resumo','contas','cartoes','reserva','atividade'].includes(h) ? h : 'resumo'; render(); window.scrollTo(0,0); }
+function fromHash(){ const h = location.hash.replace('#',''); tab = ['resumo','contas','cartoes','terceiros','reserva','atividade'].includes(h) ? h : 'resumo'; render(); window.scrollTo(0,0); }
 window.addEventListener('hashchange', fromHash);
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeModal(); });
 

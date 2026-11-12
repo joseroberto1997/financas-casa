@@ -11,7 +11,8 @@ App simples para o casal lançar gastos, acompanhar contas do mês, faturas dos 
 - **Contas**: contas fixas e entradas, status Pago / A pagar, faturas calculadas automaticamente a partir dos cartões.
 - **Gastos**: lance qualquer gasto escolhendo como foi pago — **Crédito** (entra na fatura do cartão: Itaú, C6, Nubank…), **Débito**, **Pix** ou **Dinheiro** (já conta como pago no mês). Compras únicas, parceladas ou de todo mês.
 - **Dívida de terceiros** em qualquer gasto (ex.: Gilberto): a parte da outra pessoa sai da conta da casa e vai para “a receber”, com botão “Recebi tudo”.
-- **Guardado**: saldo reservado para as contas; ao marcar algo como pago dá para tirar automaticamente do guardado.
+- **Guardado** em duas caixinhas: **Contas e dívidas** e **Emergência**, com transferência entre elas; ao marcar algo como pago dá para tirar automaticamente da caixinha.
+- **Terceiros** (aba própria): saldo em aberto de cada pessoa, compras no nome dela, **pagamentos parciais** (ex.: “mandou R$ 1.000”) e histórico mês a mês. O pagamento pode entrar direto no guardado para contas.
 - **Atividade**: histórico de quem lançou/editou o quê.
 - **Visitante (somente leitura)**: um terceiro (ex.: Gilberto) entra com o próprio e-mail e vê **apenas** a parte dele em cada gasto, por mês, com o que está pago e pendente. Ele não vê as outras despesas e não edita nada. Libere com `insert into public.visitantes (email, nome) values ('email', 'Gilberto');` — o nome tem que ser igual ao usado em “Dívida de terceiros”.
 - **Começar mês**: copia contas, entradas, recorrentes e a próxima parcela das compras parceladas do mês anterior.

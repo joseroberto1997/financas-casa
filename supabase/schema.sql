@@ -130,3 +130,23 @@ grant execute on function public.minhas_dividas() to authenticated;
 
 -- Para liberar um visitante (troque e rode):
 -- insert into public.visitantes (email, nome) values ('email-do-visitante@exemplo.com', 'Gilberto');
+
+-- =========================================================
+-- 10) PAGAMENTOS DE TERCEIROS (parciais) + caixinhas do guardado
+-- =========================================================
+alter table public.registros drop constraint if exists registros_col_check;
+alter table public.registros add constraint registros_col_check
+  check (col in ('contas','entradas','cartao','faturas','reserva','config','recebimentos'));
+
+create or replace function public.meus_pagamentos()
+returns table (id text, mes text, data text, valor numeric, descricao text)
+language sql stable security definer set search_path = public as $$
+  select r.id, r.data->>'mes', r.data->>'data', (r.data->>'valor')::numeric, r.data->>'descricao'
+  from public.registros r
+  where r.col = 'recebimentos'
+    and public.nome_visitante() is not null
+    and lower(trim(r.data->>'pessoa')) = lower(trim(public.nome_visitante()))
+  order by 3 desc;
+$$;
+revoke all on function public.meus_pagamentos() from public, anon;
+grant execute on function public.meus_pagamentos() to authenticated;
