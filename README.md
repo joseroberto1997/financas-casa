@@ -13,6 +13,7 @@ App simples para o casal lançar gastos, acompanhar contas do mês, faturas dos 
 - **Dívida de terceiros** em qualquer gasto (ex.: Gilberto): a parte da outra pessoa sai da conta da casa e vai para “a receber”, com botão “Recebi tudo”.
 - **Guardado**: saldo reservado para as contas; ao marcar algo como pago dá para tirar automaticamente do guardado.
 - **Atividade**: histórico de quem lançou/editou o quê.
+- **Visitante (somente leitura)**: um terceiro (ex.: Gilberto) entra com o próprio e-mail e vê **apenas** a parte dele em cada gasto, por mês, com o que está pago e pendente. Ele não vê as outras despesas e não edita nada. Libere com `insert into public.visitantes (email, nome) values ('email', 'Gilberto');` — o nome tem que ser igual ao usado em “Dívida de terceiros”.
 - **Começar mês**: copia contas, entradas, recorrentes e a próxima parcela das compras parceladas do mês anterior.
 - Atualiza em tempo real entre os dois celulares. Pode ser instalado na tela inicial (“Adicionar à tela de início”).
 

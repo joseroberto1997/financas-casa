@@ -662,7 +662,42 @@ function vAtividade(){
 }
 
 /* ---------- render ---------- */
-let phase = 'loading'; // config | login | loading | app | notmember
+let phase = 'loading'; // config | login | loading | app | notmember | visitor
+let visitante = null, dividas = [], visErr = '';
+async function loadVisitante(){
+  const {data, error} = await sb.rpc('minhas_dividas');
+  if (error){ visErr = 'Não foi possível carregar: ' + error.message; return; }
+  visErr = ''; dividas = data || [];
+}
+function vVisitante(){
+  const mesesCom = [...new Set(dividas.map(d=>d.mes))].sort();
+  const doMes = dividas.filter(d=>d.mes===mes);
+  const tot = r2(doMes.reduce((a,d)=>a+(+d.valor||0),0));
+  const rec = r2(doMes.filter(d=>d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
+  const pendGeral = r2(dividas.filter(d=>!d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
+  const pendMeses = [...new Set(dividas.filter(d=>!d.recebido).map(d=>d.mes))].sort();
+  return `
+  ${visErr?`<div class="banner">${esc(visErr)}</div>`:''}
+  <div class="card">
+    <h3>👤 Olá, ${esc(visitante)}</h3>
+    <div class="small muted">Aqui aparecem só as compras que estão no seu nome. Esta tela é apenas para consulta.</div>
+  </div>
+  <div class="grid" style="margin-bottom:12px">
+    <div class="stat"><div class="k">Total em ${esc(MESES[+mes.slice(5)-1])}</div><div class="v">${brl(tot)}</div></div>
+    <div class="stat"><div class="k">Falta pagar no mês</div><div class="v" style="color:${tot-rec>0.004?'var(--warn)':'var(--accent)'}">${tot-rec>0.004?brl(tot-rec):'Quitado ✓'}</div></div>
+  </div>
+  ${pendGeral>0.004?`<div class="card"><h3>⏳ Total pendente (todos os meses)</h3><div class="big" style="font-size:24px;color:var(--warn)">${brl(pendGeral)}</div>
+    <div class="actions" style="margin-top:8px">${pendMeses.map(m=>`<button class="chip ${m===mes?'on':''}" data-vm="${m}">${mesCurto(m)}</button>`).join('')}</div></div>`:''}
+  <div class="card"><h3>🧾 Compras de ${esc(mesLabel(mes))}</h3>
+    ${doMes.length ? doMes.map(d=>`<div class="row"><div class="main"><div class="t">${esc(d.descricao)}</div>
+      <div class="s"><span class="tag">${esc(d.meio)}</span>${d.parc_total?`<span class="tag">${d.parc_atual}/${d.parc_total}</span>`:''}${d.recebido?'<span class="tag ok">Pago ✓</span>':'<span class="tag" style="background:var(--warn-soft);color:var(--warn)">Pendente</span>'}</div></div>
+      <div class="val">${brl(d.valor)}</div></div>`).join('') : '<div class="empty">Nenhuma compra no seu nome neste mês.</div>'}
+  </div>
+  ${mesesCom.length?`<div class="card"><h3>📅 Meses</h3><table><tr><th>Mês</th><th>Total</th><th>Pendente</th></tr>
+    ${mesesCom.slice().reverse().map(m=>{ const ds=dividas.filter(d=>d.mes===m); const t=r2(ds.reduce((a,d)=>a+(+d.valor||0),0)); const pd=r2(ds.filter(d=>!d.recebido).reduce((a,d)=>a+(+d.valor||0),0));
+      return `<tr style="cursor:pointer" data-vm="${m}"><td>${m===mes?'<b>':''}${mesCurto(m)}${m===mes?'</b>':''}</td><td>${brl(t)}</td><td class="${pd>0.004?'neg':'pos'}">${pd>0.004?brl(pd):'—'}</td></tr>`; }).join('')}</table></div>`:''}
+  <div style="text-align:center;margin-top:6px"><button class="btn sm" id="vref">↻ Atualizar</button></div>`;
+}
 let session = null, authMsg = '';
 function renderBanner(){
   const b = $('#banner');
@@ -699,16 +734,17 @@ let authMode = 'login';
 function render(){
   const inApp = phase==='app';
   $('#mlabel').textContent = mesLabel(mes);
-  document.querySelector('.monthnav').style.display = inApp ? '' : 'none';
+  document.querySelector('.monthnav').style.display = (inApp || phase==='visitor') ? '' : 'none';
   $('#tabs').style.display = inApp ? '' : 'none';
   document.querySelectorAll('#tabs a').forEach(a=>a.classList.toggle('on', a.dataset.t===tab));
-  $('#me').innerHTML = session ? `<b>${esc(who(myId)!=='Alguém'?who(myId):session.user.email)}</b><br><button class="btn sm" id="logout" style="margin-top:3px;padding:3px 8px">Sair</button>` : '';
+  $('#me').innerHTML = session ? `<b>${esc(phase==='visitor'?visitante:(who(myId)!=='Alguém'?who(myId):session.user.email))}</b><br><button class="btn sm" id="logout" style="margin-top:3px;padding:3px 8px">Sair</button>` : '';
   const lo = $('#logout'); if (lo) lo.onclick = logout;
   renderBanner();
   const v = $('#view');
   if (phase==='config') v.innerHTML = vConfig();
   else if (phase==='login') v.innerHTML = vLogin();
   else if (phase==='notmember') v.innerHTML = vNotMember();
+  else if (phase==='visitor') v.innerHTML = vVisitante();
   else if (phase==='loading') v.innerHTML = '<div class="empty">Carregando…</div>';
   else v.innerHTML = ({resumo:vResumo, contas:vContas, cartoes:vCartoes, reserva:vReserva, atividade:vAtividade}[tab])();
   const fab = $('#fab');
@@ -716,6 +752,10 @@ function render(){
   if (inApp && canWrite && fabs[tab]) { fab.hidden=false; fab.textContent=fabs[tab][0]; fab.onclick=fabs[tab][1]; } else fab.hidden=true;
   if (phase==='login') bindLogin(v);
   if (phase==='notmember') v.querySelector('#logout2').onclick = logout;
+  if (phase==='visitor'){
+    v.querySelectorAll('[data-vm]').forEach(el=>el.onclick=()=>{ mes=el.dataset.vm; render(); window.scrollTo(0,0); });
+    const rf = v.querySelector('#vref'); if (rf) rf.onclick = async ()=>{ rf.disabled=true; await loadVisitante(); render(); };
+  }
   if (inApp) bindView(v);
 }
 function bindLogin(v){
@@ -793,7 +833,11 @@ async function loadAll(){
 async function startApp(){
   myId = session.user.id; phase = 'loading'; render();
   const {data: mem} = await sb.from('membros').select('email').ilike('email', session.user.email).maybeSingle();
-  if (!mem){ phase = 'notmember'; render(); return; }
+  if (!mem){
+    const {data: vis} = await sb.from('visitantes').select('nome').ilike('email', session.user.email).maybeSingle();
+    if (vis){ visitante = vis.nome; await loadVisitante(); phase = 'visitor'; render(); return; }
+    phase = 'notmember'; render(); return;
+  }
   canWrite = true;
   try { await Promise.all([loadAll(), loadPerfis()]); loadErr=''; }
   catch(e){ loadErr = 'Não foi possível carregar os dados: ' + (e.message||e); }
@@ -819,7 +863,7 @@ fromHash();
   sb.auth.onAuthStateChange((ev, s) => {
     const was = session && session.user.id;
     session = s;
-    if (!s){ phase='login'; myId=null; COLS.forEach(c=>S[c]=[]); if(channel){ sb.removeChannel(channel); channel=null; } render(); }
+    if (!s){ phase='login'; myId=null; visitante=null; dividas=[]; COLS.forEach(c=>S[c]=[]); if(channel){ sb.removeChannel(channel); channel=null; } render(); }
     else if (was !== s.user.id){ setTimeout(startApp, 0); }
   });
   const {data} = await sb.auth.getSession();

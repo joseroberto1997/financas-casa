@@ -86,3 +86,47 @@ exception when duplicate_object then null; end $$;
 -- 8) LIBERE OS E-MAILS DA CASA (troque pelos e-mails reais e rode):
 -- insert into public.membros (email) values ('seu-email@exemplo.com'), ('email-da-michelle@exemplo.com');
 -- =========================================================
+
+-- =========================================================
+-- 9) VISITANTES (somente leitura das próprias dívidas, ex.: Gilberto)
+--    O visitante NÃO lê a tabela registros: ele só chama a função
+--    minhas_dividas(), que devolve apenas a parte dele em cada gasto.
+-- =========================================================
+create table if not exists public.visitantes (
+  email text primary key,
+  nome  text not null          -- igual ao nome usado em "Dívida de terceiros" (ex.: Gilberto)
+);
+alter table public.visitantes enable row level security;
+drop policy if exists "ver meu cadastro de visitante" on public.visitantes;
+create policy "ver meu cadastro de visitante" on public.visitantes for select to authenticated
+  using (lower(email) = lower(auth.jwt()->>'email'));
+
+create or replace function public.nome_visitante() returns text
+language sql stable security definer set search_path = public as $$
+  select nome from public.visitantes where lower(email) = lower(auth.jwt()->>'email') limit 1;
+$$;
+
+create or replace function public.minhas_dividas()
+returns table (id text, mes text, descricao text, meio text, parc_atual int, parc_total int, valor numeric, recebido boolean)
+language sql stable security definer set search_path = public as $$
+  select r.id,
+         r.data->>'mes',
+         r.data->>'descricao',
+         case when coalesce(r.data->>'forma','credito') = 'credito' then 'Cartão ' || coalesce(r.data->>'cartao','')
+              else initcap(r.data->>'forma') end,
+         nullif(r.data->>'parcAtual','')::int,
+         nullif(r.data->>'parcTotal','')::int,
+         (t->>'valor')::numeric,
+         coalesce((t->>'recebido')::boolean, false)
+  from public.registros r
+  cross join lateral jsonb_array_elements(coalesce(r.data->'terceiros','[]'::jsonb)) t
+  where r.col = 'cartao'
+    and public.nome_visitante() is not null
+    and lower(trim(t->>'nome')) = lower(trim(public.nome_visitante()))
+  order by 2 desc, 3;
+$$;
+revoke all on function public.minhas_dividas() from public, anon;
+grant execute on function public.minhas_dividas() to authenticated;
+
+-- Para liberar um visitante (troque e rode):
+-- insert into public.visitantes (email, nome) values ('email-do-visitante@exemplo.com', 'Gilberto');
