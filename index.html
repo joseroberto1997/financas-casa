@@ -89,6 +89,8 @@ td:first-child,th:first-child{text-align:left}
 .f{margin-bottom:12px}
 .f label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px}
 .f input,.f select{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.f input[inputmode=decimal],.trow input[inputmode=decimal]{font-variant-numeric:tabular-nums;font-weight:700}
+.money{position:relative}.money::before{content:'R$';position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);font-weight:700;font-size:14px;pointer-events:none}.money input{padding-left:38px!important}
 .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .seg button{flex:1;border:0;background:var(--bg);padding:9px 6px;font-weight:600;font-size:13px}
 .seg button.on{background:var(--ink);color:var(--bg)}
@@ -143,9 +145,37 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const brl = v => (Math.round((v||0)*100)/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const r2 = v => Math.round((v||0)*100)/100;
-function parseBRL(s){ s = String(s??'').trim().replace(/[R$\s]/g,''); if(!s) return NaN;
-  if (s.includes(',')) s = s.replace(/\./g,'').replace(',','.'); const n = parseFloat(s); return isFinite(n) ? r2(n) : NaN; }
-const fmtIn = v => (v===undefined||v===null||v==='') ? '' : String(r2(v)).replace('.',',');
+function parseBRL(s){
+  s = String(s??'').trim().replace(/[R$\s]/g,''); if(!s) return NaN;
+  if (s.includes(',')) s = s.replace(/\./g,'').replace(',','.');
+  else { const m = s.match(/\.(\d{1,2})$/); s = m ? s.slice(0,m.index).replace(/\./g,'')+'.'+m[1] : s.replace(/\./g,''); }
+  const n = parseFloat(s); return isFinite(n) ? r2(n) : NaN;
+}
+const fmtNum = v => (+v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtIn = v => (v===undefined||v===null||v==='' || !isFinite(+v)) ? '' : fmtNum(v);
+/* máscara de valor: 1.234,56 enquanto digita */
+function maskMoney(raw){
+  let s = String(raw).replace(/[^\d,\.]/g,'');
+  let intp, dec = null;
+  const ci = s.indexOf(',');
+  if (ci >= 0) { intp = s.slice(0,ci); dec = s.slice(ci+1).replace(/[^\d]/g,''); }
+  else { const m = s.match(/\.(\d{0,2})$/); if (m) { intp = s.slice(0,m.index); dec = m[1]; } else intp = s; }
+  intp = intp.replace(/\D/g,'').replace(/^0+(?=\d)/,'');
+  if (intp === '' && dec !== null) intp = '0';
+  intp = intp.replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  return dec === null ? intp : intp + ',' + dec.slice(0,2);
+}
+document.addEventListener('input', e=>{
+  const el = e.target; if (!(el instanceof HTMLInputElement) || el.inputMode !== 'decimal') return;
+  const before = el.value, fromEnd = before.length - (el.selectionStart ?? before.length);
+  const after = maskMoney(before);
+  if (after !== before){ el.value = after; const pos = Math.max(0, after.length - fromEnd); try{ el.setSelectionRange(pos,pos); }catch(_){} }
+});
+document.addEventListener('focusout', e=>{
+  const el = e.target; if (!(el instanceof HTMLInputElement) || el.inputMode !== 'decimal' || !el.value) return;
+  const n = parseBRL(el.value); if (isFinite(n)) el.value = fmtNum(n);
+});
+
 const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const mesLabel = m => { const [y,mm] = m.split('-').map(Number); return MESES[mm-1] + ' ' + y; };
 const mesCurto = m => { const [y,mm] = m.split('-').map(Number); return MESES[mm-1].slice(0,3) + '/' + String(y).slice(2); };
@@ -320,7 +350,7 @@ function formConta(c){
   const isNew = !c; c = c || {status:'apagar'};
   openModal(`<h2>${isNew?'Nova conta':'Editar conta'}</h2>
     <div class="f"><label>Descrição</label><input id="d" value="${esc(c.descricao)}" placeholder="Ex.: Aluguel, Luz, Internet"></div>
-    <div class="two"><div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(c.valor)}" placeholder="0,00"></div>
+    <div class="two"><div class="f"><label>Valor</label><div class="money"><input id="v" inputmode="decimal" value="${fmtIn(c.valor)}" placeholder="0,00"></div></div>
     <div class="f"><label>Vence dia (opcional)</label><input id="dia" inputmode="numeric" value="${esc(c.dia||'')}" placeholder="10"></div></div>
     <div class="f"><label>Situação</label>${seg('st',[['apagar','A pagar'],['pago','Pago']],c.status)}</div>
     ${!isNew?`<p class="small muted">${metaLine(c)}</p>`:''}
@@ -343,7 +373,7 @@ function formEntrada(e){
   const isNew = !e; e = e || {tipo:'dinheiro'};
   openModal(`<h2>${isNew?'Nova entrada':'Editar entrada'}</h2>
     <div class="f"><label>Descrição</label><input id="d" value="${esc(e.descricao)}" placeholder="Ex.: Salário Zé, Salário Michelle dia 5"></div>
-    <div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(e.valor)}" placeholder="0,00"></div>
+    <div class="f"><label>Valor</label><div class="money"><input id="v" inputmode="decimal" value="${fmtIn(e.valor)}" placeholder="0,00"></div></div>
     <div class="f"><label>Tipo</label>${seg('tp',[['dinheiro','Dinheiro'],['beneficio','VR / VA']],e.tipo)}</div>
     <p class="small muted">VR/VA aparece separado e não entra na conta da sobra em dinheiro.</p>
     ${!isNew?`<p class="small muted">${metaLine(e)}</p>`:''}
@@ -374,7 +404,7 @@ function formItem(it, preCard){
     <div class="f" id="fcart"><label>Cartão de crédito</label><select id="c">${cards.map(c=>`<option ${c===it.cartao?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
     <div class="f" id="fbanco"><label>Saiu de qual conta? (opcional)</label><select id="b"><option value="">—</option>${[...new Set([...cfg().cartoes, ...(it.banco?[it.banco]:[])])].map(c=>`<option ${c===it.banco?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
     <div class="f"><label>Descrição</label><input id="d" value="${esc(it.descricao)}" placeholder="Ex.: Mercado, Ração dos gatos, Uber"></div>
-    <div class="f"><label id="vlab">Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(it.valor)}" placeholder="0,00"></div>
+    <div class="f"><label id="vlab">Valor</label><div class="money"><input id="v" inputmode="decimal" value="${fmtIn(it.valor)}" placeholder="0,00"></div></div>
     <div class="f"><label>Tipo</label>${seg('tp',[['avulso','Única'],['parc','Parcelado'],['rec','Todo mês']],tipo)}</div>
     <div class="two" id="parcs" ${tipo==='parc'?'':'hidden'}>
       <div class="f"><label>Parcela atual</label><input id="pa" inputmode="numeric" value="${esc(it.parcAtual||'')}" placeholder="1"></div>
@@ -402,7 +432,7 @@ function formItem(it, preCard){
     const tpSeg = ov.querySelector('[data-name=tp]'), fmSeg = ov.querySelector('[data-name=fm]');
     const upd = ()=>{ const cr = fmSeg.dataset.v==='credito';
       ov.querySelector('#fcart').hidden = !cr; ov.querySelector('#fbanco').hidden = cr || fmSeg.dataset.v==='dinheiro';
-      ov.querySelector('#vlab').textContent = cr ? 'Valor nesta fatura (R$)' : 'Valor (R$)';
+      ov.querySelector('#vlab').textContent = cr ? 'Valor nesta fatura' : 'Valor';
       const pb = tpSeg.querySelector('[data-v=parc]'); pb.hidden = !cr;
       if (!cr && tpSeg.dataset.v==='parc'){ tpSeg.querySelector('[data-v=avulso]').click(); }
       ov.querySelector('#parcs').hidden = tpSeg.dataset.v!=='parc'; };
@@ -437,7 +467,7 @@ function formReserva(r, tipoIni, cxIni){
   openModal(`<h2>${isNew?(r.tipo==='retirada'?'Tirar do guardado':'Guardar dinheiro'):'Editar movimento'}</h2>
     <div class="f"><label>Caixinha</label>${seg('cx',[['contas','🧾 Contas e dívidas'],['emergencia','🛟 Emergência']],cxOf(r))}</div>
     <div class="f"><label>Tipo</label>${seg('tp',[['deposito','Guardar'],['retirada','Retirar']],r.tipo)}</div>
-    <div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div>
+    <div class="f"><label>Valor</label><div class="money"><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div></div>
     <div class="f"><label>Descrição</label><input id="d" value="${esc(r.descricao||'')}" placeholder="Ex.: Separado do salário"></div>
     <div class="f"><label>Data</label><input id="dt" type="date" value="${esc(r.data||hoje)}"></div>
     ${!isNew?`<p class="small muted">${metaLine(r)}</p>`:''}
@@ -459,7 +489,7 @@ function formTransfer(){
   const hoje = new Date().toISOString().slice(0,10);
   openModal(`<h2>Transferir entre caixinhas</h2>
     <div class="f"><label>De → Para</label>${seg('dir',[['contas','Contas → Emergência'],['emergencia','Emergência → Contas']],'contas')}</div>
-    <div class="f"><label>Valor (R$)</label><input id="v" inputmode="decimal" placeholder="0,00"></div>
+    <div class="f"><label>Valor</label><div class="money"><input id="v" inputmode="decimal" placeholder="0,00"></div></div>
     <div class="f"><label>Motivo (opcional)</label><input id="d" placeholder="Ex.: sobrou do mês"></div>
     <div class="err"></div>
     <div class="actions"><span></span><span class="actions"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="save">Transferir</button></span></div>`, ov=>{
@@ -485,7 +515,7 @@ function formPagamento(r, pessoaIni, valorIni){
   const nm = allNames();
   openModal(`<h2>${isNew?'Pagamento recebido':'Editar pagamento'}</h2>
     <div class="f"><label>Quem pagou?</label><input id="p" list="nomesP" value="${esc(r.pessoa)}" placeholder="Ex.: Gilberto"><datalist id="nomesP">${nm.map(n=>`<option value="${esc(n)}">`).join('')}</datalist></div>
-    <div class="f"><label>Valor recebido (R$)</label><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div>
+    <div class="f"><label>Valor recebido</label><div class="money"><input id="v" inputmode="decimal" value="${fmtIn(r.valor)}" placeholder="0,00"></div></div>
     <div class="f"><label>Data</label><input id="dt" type="date" value="${esc(r.data||hoje)}"></div>
     <div class="f"><label>Observação (opcional)</label><input id="d" value="${esc(r.descricao||'')}" placeholder="Ex.: Pix, parte da fatura de novembro"></div>
     ${isNew?`<label style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;font-size:14px"><input type="checkbox" id="g" checked style="width:18px;height:18px"> Colocar esse dinheiro no guardado para contas e dívidas</label>`:(r.reservaRef?'<p class="small muted">Esse pagamento entrou no guardado para contas; ao apagar, sai de lá também.</p>':'')}
